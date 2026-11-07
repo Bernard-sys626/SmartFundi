@@ -1,0 +1,42 @@
+name: Backend tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ["backend/**", ".github/workflows/backend-test.yml"]
+  pull_request:
+    paths: ["backend/**"]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sf
+          POSTGRES_PASSWORD: sf
+          POSTGRES_DB: smartfundi
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sf" --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Start API and run the end-to-end test
+        env:
+          DATABASE_URL: postgresql://sf:sf@127.0.0.1:5432/smartfundi
+          DEV_OTP: "true"
+          PAYMENT_MODE: simulated
+          RATE_LIMIT_MAX: "1000"
+          PORT: "8080"
+        run: |
+          node src/server.js &
+          sleep 6
+          node test/smoke.js
