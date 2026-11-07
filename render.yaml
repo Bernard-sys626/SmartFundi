@@ -1,0 +1,25 @@
+# One-click backend hosting on Render (https://render.com). Free plans sleep when idle.
+services:
+  - type: web
+    name: smartfundi-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL        # paste your Neon connection string
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_PHONES
+        value: "+255740586160,+255613936160"
+      - key: PAYMENT_MODE
+        value: manual
+      - key: DEV_OTP
+        value: "false"
+      - key: BEEM_API_KEY
+        sync: false
+      - key: BEEM_SECRET
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false

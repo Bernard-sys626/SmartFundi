@@ -1,0 +1,10 @@
+node_modules/
+.env
+build/
+.dart_tool/
+app/android/
+app/ios/
+app/test/
+*.apk
+*.jks
+key.properties
