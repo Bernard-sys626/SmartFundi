@@ -3,7 +3,6 @@ services:
   - type: web
     name: smartfundi-api
     runtime: docker
-    plan: free
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health

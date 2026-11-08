@@ -18,7 +18,6 @@ async function auth(req, res, next) {
     const { id } = jwt.verify(t, SECRET);
     const u = await q1('select * from users where id=$1', [id]);
     if (!u) return fail(res, 401, 'unauthorized');
-    if (u.blocked) return fail(res, 403, 'blocked');
     req.user = u;
     next();
   } catch (e) {

@@ -82,8 +82,7 @@ class LanguageScreen extends StatelessWidget {
 /// One login for everybody: phone or email with a verification code.
 /// The server decides if the account is Client, Fundi/Company or Admin.
 class AuthScreen extends StatefulWidget {
-  final bool admin;
-  const AuthScreen({super.key, this.admin = false});
+  const AuthScreen({super.key});
   @override
   State<AuthScreen> createState() => _AuthState();
 }
@@ -97,13 +96,13 @@ class _AuthState extends State<AuthScreen> {
     if (id.length < 5) return toast(context, tr('err_invalid_identifier'));
     String? dev;
     final ok = await busy(context, () async {
-      final r = await Api.post('/auth/request-otp', {'identifier': id, 'app': appKind}) as Map;
+      final r = await Api.post('/auth/request-otp', {'identifier': id}) as Map;
       dev = r['dev_code']?.toString();
     });
     if (!ok || !mounted) return;
     final res = await showModalBottomSheet<Map>(
       context: context, isScrollControlled: true, showDragHandle: true,
-      builder: (_) => _OtpSheet(identifier: id, intent: widget.admin ? 'client' : intent, devCode: dev),
+      builder: (_) => _OtpSheet(identifier: id, intent: intent, devCode: dev),
     );
     if (res != null && mounted) {
       context.read<AppState>().login(res['token'] as String, Map<String, dynamic>.from(res['user'] as Map));
@@ -121,13 +120,9 @@ class _AuthState extends State<AuthScreen> {
           const SizedBox(height: 16),
           const Center(child: Wordmark(size: 34)),
           const SizedBox(height: 8),
-          if (widget.admin)
-            Center(child: Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5), decoration: BoxDecoration(color: brandYellow, borderRadius: BorderRadius.circular(20)), child: Text(tr('admin_badge'), style: const TextStyle(color: brandBlue, fontWeight: FontWeight.w800, letterSpacing: 1.5, fontSize: 12))))
-          else
-            Center(child: Text(tr('tagline'), style: TextStyle(color: cs.secondary))),
+          Center(child: Text(tr('tagline'), style: TextStyle(color: cs.secondary))),
           const SizedBox(height: 32),
-          if (widget.admin) Padding(padding: const EdgeInsets.only(bottom: 16), child: Text(tr('admin_only'), textAlign: TextAlign.center, style: TextStyle(color: cs.secondary, height: 1.4))),
-          if (!widget.admin) SegmentedButton<String>(
+          SegmentedButton<String>(
             showSelectedIcon: false,
             segments: [
               ButtonSegment(value: 'client', label: Text(tr('i_am_client'))),
@@ -137,7 +132,7 @@ class _AuthState extends State<AuthScreen> {
             onSelectionChanged: (v) => setState(() => intent = v.first),
             style: ButtonStyle(shape: WidgetStatePropertyAll(const StadiumBorder()), minimumSize: const WidgetStatePropertyAll(Size(0, 48))),
           ),
-          if (!widget.admin) const SizedBox(height: 20),
+          const SizedBox(height: 20),
           TextField(
             controller: _id, keyboardType: TextInputType.emailAddress,
             decoration: InputDecoration(hintText: tr('phone_or_email'), prefixIcon: const Icon(Icons.person_outline)),
@@ -145,7 +140,6 @@ class _AuthState extends State<AuthScreen> {
           ),
           const SizedBox(height: 16),
           PillButton(tr('get_code'), onPressed: _request),
-          if (!widget.admin) ...[
           const SizedBox(height: 20),
           Row(children: [const Expanded(child: Divider()), Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: Text(tr('or'))), const Expanded(child: Divider())]),
           const SizedBox(height: 20),
@@ -158,7 +152,6 @@ class _AuthState extends State<AuthScreen> {
               Text(tr('continue_google'), style: const TextStyle(fontWeight: FontWeight.w600)),
             ]),
           ),
-          ],
           const SizedBox(height: 28),
           Center(child: TextButton(onPressed: () => context.read<AppState>().resetLang(), child: Text(tr('change_language')))),
         ]),
@@ -182,7 +175,7 @@ class _OtpState extends State<_OtpSheet> {
     Map? res;
     final ok = await busy(context, () async {
       res = await Api.post('/auth/verify-otp', {
-        'identifier': widget.identifier, 'code': _code.text.trim(), 'intent': widget.intent, 'app': appKind,
+        'identifier': widget.identifier, 'code': _code.text.trim(), 'intent': widget.intent,
         'language': context.read<AppState>().lang,
       }) as Map;
     });
@@ -190,7 +183,7 @@ class _OtpState extends State<_OtpSheet> {
   }
 
   Future<void> _resend() async {
-    final ok = await busy(context, () async => await Api.post('/auth/request-otp', {'identifier': widget.identifier, 'app': appKind}));
+    final ok = await busy(context, () async => await Api.post('/auth/request-otp', {'identifier': widget.identifier}));
     if (ok) toast(context, tr('code_sent'));
   }
 
@@ -287,24 +280,4 @@ class _OnboardingState extends State<OnboardingScreen> {
       ),
     );
   }
-}
-
-/// Shown if an admin account somehow ends up in the Client/Fundi app.
-class UseAdminAppScreen extends StatelessWidget {
-  const UseAdminAppScreen({super.key});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const LogoMark(80),
-              const SizedBox(height: 20),
-              Text(tr('err_use_admin_app'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, height: 1.4)),
-              const SizedBox(height: 24),
-              PillButton(tr('logout'), outlined: true, onPressed: () => context.read<AppState>().logout()),
-            ]),
-          ),
-        ),
-      );
 }
