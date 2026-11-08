@@ -60,20 +60,24 @@ jobs:
           rm -rf test
           python3 ../tools/patch_android.py android --label "${{ matrix.label }}" --app-id "${{ matrix.app_id }}"
           
-      - name: Optimize Gradle download
+     
+      - name: Configure Gradle download
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           p = Path("android/gradle/wrapper/gradle-wrapper.properties")
-          s = p.read_text()
-          s = s.replace("-all.zip", "-bin.zip")
+          lines = p.read_text().splitlines()
 
-          if "networkTimeout=" not in s:
-              s += "\nnetworkTimeout=120000\n"
+          for i, line in enumerate(lines):
+              if line.startswith("distributionUrl="):
+                  lines[i] = r"distributionUrl=https\://downloads.gradle.org/distributions/gradle-8.12-bin.zip"
 
-          p.write_text(s)
-          print("Gradle download optimized successfully")
+          if not any(x.startswith("networkTimeout=") for x in lines):
+              lines.append("networkTimeout=120000")
+
+          p.write_text("\n".join(lines) + "\n")
+          print("Gradle download URL configured")
           PY
 
 
