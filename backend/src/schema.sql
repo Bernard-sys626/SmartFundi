@@ -61,3 +61,5 @@ CREATE INDEX IF NOT EXISTS jobs_client_idx ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS jobs_fundi_idx ON jobs(fundi_id);
 CREATE INDEX IF NOT EXISTS msg_job_idx ON messages(job_id);
 CREATE INDEX IF NOT EXISTS notif_user_idx ON notifications(user_id);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked boolean DEFAULT false;

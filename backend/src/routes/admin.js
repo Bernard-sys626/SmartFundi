@@ -12,13 +12,31 @@ async function scope(u) {
   return (await q('select region_id from admin_regions where user_id=$1', [u.id])).map((r) => r.region_id);
 }
 
+async function jobAllowed(sc, jobId) {
+  if (!sc) return true;
+  const j = await q1('select region_id from jobs where id=$1', [jobId]).catch(() => null);
+  return !!j && sc.includes(j.region_id);
+}
+async function fundiAllowed(sc, id) {
+  if (!sc) return true;
+  const r = await q1('select 1 x from fundi_areas where user_id=$1 and region_id = any($2)', [id, sc]).catch(() => null);
+  return !!r;
+}
+async function paymentAllowed(sc, id) {
+  if (!sc) return true;
+  const r = await q1('select 1 x from payments p join jobs j on j.id=p.job_id where p.id=$1 and j.region_id = any($2)', [id, sc]).catch(() => null);
+  return !!r;
+}
+
 router.get('/dashboard', asyncH(async (req, res) => {
   const sc = await scope(req.user);
   const byStatus = await q('select status, count(*)::int n from jobs where ($1::int[] is null or region_id = any($1)) group by status', [sc]);
-  const f = await q('select fundi_status s, count(*)::int n from users where role=$1 group by fundi_status', ['fundi']);
-  const c = await q1(`select count(*)::int n from users where role='client'`);
-  const pay = await q1(`select coalesce(sum(amount),0) total, coalesce(sum(platform_amount),0) platform, coalesce(sum(fundi_amount),0) fundi from payments where status='success'`);
-  const pend = await q1(`select count(*)::int n from payments where status='pending'`);
+  const f = await q(`select u.fundi_status s, count(*)::int n from users u where u.role='fundi'
+    and ($1::int[] is null or exists(select 1 from fundi_areas a where a.user_id=u.id and a.region_id = any($1))) group by u.fundi_status`, [sc]);
+  const c = await q1(`select count(*)::int n from users where role='client' and ($1::int[] is null or region_id = any($1))`, [sc]);
+  const pay = await q1(`select coalesce(sum(p.amount),0) total, coalesce(sum(p.platform_amount),0) platform, coalesce(sum(p.fundi_amount),0) fundi
+    from payments p join jobs j on j.id=p.job_id where p.status='success' and ($1::int[] is null or j.region_id = any($1))`, [sc]);
+  const pend = await q1(`select count(*)::int n from payments p join jobs j on j.id=p.job_id where p.status='pending' and ($1::int[] is null or j.region_id = any($1))`, [sc]);
   res.json({ jobs_by_status: byStatus, fundis_by_status: f, clients: c.n, payments: pay, pending_payments: pend.n });
 }));
 
@@ -28,18 +46,20 @@ router.get('/fundis', asyncH(async (req, res) => {
   const rows = await q(
     `select u.id,u.name,u.phone,u.email,u.fundi_type,u.company_name,u.fundi_status,u.created_at,
        (select string_agg(distinct d.name, ', ') from fundi_areas a join districts d on d.id=a.district_id where a.user_id=u.id) districts
-     from users u where u.role='fundi' and ($1::text is null or u.fundi_status=$1)
+     from users u where u.role='fundi' and ($1::text is null or u.fundi_status=$1) and ($3::text is null or u.fundi_type=$3)
      and ($2::int[] is null or exists(select 1 from fundi_areas a where a.user_id=u.id and a.region_id = any($2)))
      order by case u.fundi_status when 'pending' then 0 else 1 end, u.created_at desc limit 300`,
-    [req.query.status || null, sc]);
+    [req.query.status || null, sc, req.query.type || null]);
   res.json(rows);
 }));
 router.get('/fundis/:id', asyncH(async (req, res) => {
+  if (!(await fundiAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   const u = await q1(`select id from users where id=$1 and role='fundi'`, [req.params.id]).catch(() => null);
   if (!u) return fail(res, 404, 'not_found');
   res.json(await profile(u));
 }));
 async function setStatus(req, res, status, key) {
+  if (!(await fundiAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   const u = await q1(`update users set fundi_status=$2, reject_reason=$3 where id=$1 and role='fundi' returning id`, [req.params.id, status, status === 'rejected' ? req.body.reason || null : null]);
   if (!u) return fail(res, 404, 'not_found');
   if (key) await notify(u.id, key, { reason: req.body.reason || '' });
@@ -60,16 +80,95 @@ router.post('/fundis', asyncH(async (req, res) => {
   res.json(await profile(u));
 }));
 router.put('/fundis/:id', asyncH(async (req, res) => {
+  if (!(await fundiAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   const b = req.body;
-  const u = await q1(`update users set name=coalesce($2,name), company_name=coalesce($3,company_name), fundi_type=coalesce($4,fundi_type) where id=$1 and role='fundi' returning id`,
-    [req.params.id, b.name || null, b.company_name || null, ['technician', 'company'].includes(b.fundi_type) ? b.fundi_type : null]);
+  let phone = null, email = null;
+  if (b.phone) { const n = normId(b.phone); if (!n || n.type !== 'phone') return fail(res, 400, 'invalid_identifier'); phone = n.value; }
+  if (b.email) { const n = normId(b.email); if (!n || n.type !== 'email') return fail(res, 400, 'invalid_identifier'); email = n.value; }
+  let u;
+  try {
+    u = await q1(`update users set name=coalesce($2,name), company_name=coalesce($3,company_name), fundi_type=coalesce($4,fundi_type),
+                  phone=coalesce($5,phone), email=coalesce($6,email) where id=$1 and role='fundi' returning id`,
+      [req.params.id, b.name || null, b.company_name || null, ['technician', 'company'].includes(b.fundi_type) ? b.fundi_type : null, phone, email]);
+  } catch (e) {
+    if (e.code === '23505') return fail(res, 409, 'already_exists');
+    throw e;
+  }
   if (!u) return fail(res, 404, 'not_found');
   await saveProfile(u.id, { areas: b.areas, service_ids: b.service_ids });
   res.json(await profile(u));
 }));
 router.post('/fundis/:id/documents', asyncH(async (req, res) => {
+  if (!(await fundiAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   await q('insert into fundi_documents(user_id,kind,name,file_id) values($1,$2,$3,$4)', [req.params.id, req.body.kind || 'other', req.body.name || null, req.body.file_id]);
   res.json(await profile({ id: req.params.id }));
+}));
+
+
+// ---------- clients ----------
+router.get('/clients', asyncH(async (req, res) => {
+  const sc = await scope(req.user);
+  const term = req.query.q ? '%' + String(req.query.q).trim() + '%' : null;
+  res.json(await q(
+    `select u.id,u.name,u.phone,u.email,u.blocked,u.created_at,
+       (select count(*)::int from jobs j where j.client_id=u.id) jobs_total,
+       (select count(*)::int from jobs j where j.client_id=u.id and j.status='completed') jobs_completed,
+       (select coalesce(sum(p.amount),0)::float from payments p where p.client_id=u.id and p.status='success') spent
+     from users u where u.role='client' and ($1::int[] is null or u.region_id = any($1))
+       and ($2::text is null or u.name ilike $2 or u.phone ilike $2 or u.email ilike $2)
+     order by u.created_at desc limit 300`, [sc, term]));
+}));
+router.get('/clients/:id', asyncH(async (req, res) => {
+  const u = await q1(`select id,name,phone,email,blocked,created_at,region_id,district_id from users where id=$1 and role='client'`, [req.params.id]).catch(() => null);
+  if (!u) return fail(res, 404, 'not_found');
+  const rows = await q('select id from jobs where client_id=$1 order by created_at desc limit 30', [u.id]);
+  const jobs = [];
+  for (const r of rows) jobs.push(await jobView(r.id, req.user));
+  res.json({ client: u, jobs });
+}));
+router.post('/clients/:id/block', asyncH(async (req, res) => {
+  const r = await q1(`update users set blocked=$2 where id=$1 and role='client' returning id,blocked`, [req.params.id, !!req.body.blocked]);
+  if (!r) return fail(res, 404, 'not_found');
+  res.json(r);
+}));
+
+// ---------- reports ----------
+router.get('/reports', asyncH(async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days || '30', 10) || 30, 1), 365);
+  const sc = await scope(req.user);
+  const since = `now() - make_interval(days => $1)`;
+  const jobs = await q1(
+    `select count(*)::int total, count(*) filter (where status='completed')::int completed, count(*) filter (where status='cancelled')::int cancelled
+     from jobs where created_at >= ${since} and ($2::int[] is null or region_id = any($2))`, [days, sc]);
+  const money = await q1(
+    `select coalesce(sum(p.amount),0)::float revenue, coalesce(sum(p.platform_amount),0)::float platform, coalesce(sum(p.fundi_amount),0)::float fundis
+     from payments p join jobs j on j.id=p.job_id where p.status='success' and p.confirmed_at >= ${since} and ($2::int[] is null or j.region_id = any($2))`, [days, sc]);
+  const newClients = await q1(`select count(*)::int n from users where role='client' and created_at >= ${since}`, [days]);
+  const newFundis = await q1(`select count(*)::int n from users where role='fundi' and created_at >= ${since}`, [days]);
+  const byDay = await q(
+    `select to_char(d::date,'YYYY-MM-DD') as day,
+       (select count(*)::int from jobs j where j.created_at::date = d::date and ($2::int[] is null or j.region_id = any($2))) as jobs,
+       (select coalesce(sum(p.amount),0)::float from payments p join jobs j on j.id=p.job_id
+          where p.status='success' and p.confirmed_at::date = d::date and ($2::int[] is null or j.region_id = any($2))) as revenue
+     from generate_series(current_date::timestamp - make_interval(days => $1 - 1), current_date::timestamp, interval '1 day') d order by d`, [days, sc]);
+  const byService = await q(
+    `select s.key, s.name_sw, s.name_en, s.name_fr, count(*)::int jobs from jobs j join services s on s.id=j.service_id
+     where j.created_at >= ${since} and ($2::int[] is null or j.region_id = any($2)) group by s.id order by jobs desc`, [days, sc]);
+  const byRegion = await q(
+    `select r.name, count(*)::int jobs from jobs j join regions r on r.id=j.region_id
+     where j.created_at >= ${since} and ($2::int[] is null or j.region_id = any($2)) group by r.id order by jobs desc limit 15`, [days, sc]);
+  const top = await q(
+    `select u.id, coalesce(u.company_name,u.name,u.phone) name, u.fundi_type,
+       count(*) filter (where j.status='completed')::int completed,
+       coalesce((select sum(p.fundi_amount) from payments p join jobs jj on jj.id=p.job_id where jj.fundi_id=u.id and p.status='success' and p.confirmed_at >= ${since}),0)::float earned,
+       (select round(avg(r.rating)::numeric,1)::float from ratings r join jobs jj on jj.id=r.job_id where jj.fundi_id=u.id) rating
+     from users u join jobs j on j.fundi_id=u.id where j.created_at >= ${since} and ($2::int[] is null or j.region_id = any($2))
+     group by u.id order by completed desc, earned desc limit 10`, [days, sc]);
+  res.json({
+    days, jobs, money, new_clients: newClients.n, new_fundis: newFundis.n,
+    completion_rate: jobs.total ? Math.round((jobs.completed / jobs.total) * 100) : 0,
+    by_day: byDay, by_service: byService, by_region: byRegion, top_fundis: top,
+  });
 }));
 
 // ---------- jobs ----------
@@ -83,11 +182,13 @@ router.get('/jobs', asyncH(async (req, res) => {
   res.json(out);
 }));
 router.get('/jobs/:id', asyncH(async (req, res) => {
+  if (!(await jobAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   const v = await jobView(req.params.id, req.user).catch(() => null);
   if (!v) return fail(res, 404, 'not_found');
   res.json(v);
 }));
 router.post('/jobs/:id/reassign', asyncH(async (req, res) => {
+  if (!(await jobAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   const j = await q1('select * from jobs where id=$1', [req.params.id]).catch(() => null);
   if (!j || ['completed', 'cancelled'].includes(j.status)) return fail(res, 400, 'invalid_status');
   const f = await q1(`select id from users where id=$1 and role='fundi' and fundi_status='approved'`, [req.body.fundi_id]).catch(() => null);
@@ -100,6 +201,7 @@ router.post('/jobs/:id/reassign', asyncH(async (req, res) => {
   res.json(await jobView(j.id, req.user));
 }));
 router.post('/jobs/:id/cancel', asyncH(async (req, res) => {
+  if (!(await jobAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   const j = await q1('select * from jobs where id=$1', [req.params.id]).catch(() => null);
   if (!j || ['completed', 'cancelled'].includes(j.status)) return fail(res, 400, 'invalid_status');
   await q(`update jobs set status='cancelled', cancelled_at=now(), cancelled_by='admin', cancel_reason=$2 where id=$1`, [j.id, req.body.reason || null]);
@@ -160,16 +262,22 @@ router.put('/settings', mainAdmin, asyncH(async (req, res) => {
 
 // ---------- payments ----------
 router.get('/payments', asyncH(async (req, res) => {
+  const sc = await scope(req.user);
   const rows = await q(
     `select p.id,p.reference,p.amount,p.method,p.phone,p.status,p.commission_percent,p.platform_amount,p.fundi_amount,p.created_at,j.code,
        cu.name client_name, coalesce(fu.company_name,fu.name) fundi_name
      from payments p join jobs j on j.id=p.job_id join users cu on cu.id=p.client_id left join users fu on fu.id=j.fundi_id
-     where ($1::text is null or p.status=$1) order by p.created_at desc limit 300`, [req.query.status || null]);
-  const t = await q1(`select coalesce(sum(amount),0) total, coalesce(sum(platform_amount),0) platform, coalesce(sum(fundi_amount),0) fundi from payments where status='success'`);
+     where ($1::text is null or p.status=$1) and ($2::int[] is null or j.region_id = any($2)) order by p.created_at desc limit 300`, [req.query.status || null, sc]);
+  const t = await q1(`select coalesce(sum(p.amount),0) total, coalesce(sum(p.platform_amount),0) platform, coalesce(sum(p.fundi_amount),0) fundi
+    from payments p join jobs j on j.id=p.job_id where p.status='success' and ($1::int[] is null or j.region_id = any($1))`, [sc]);
   res.json({ totals: t, items: rows });
 }));
-router.post('/payments/:id/confirm', asyncH(async (req, res) => res.json(await confirmPayment(req.params.id))));
+router.post('/payments/:id/confirm', asyncH(async (req, res) => {
+  if (!(await paymentAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
+  res.json(await confirmPayment(req.params.id));
+}));
 router.post('/payments/:id/reject', asyncH(async (req, res) => {
+  if (!(await paymentAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
   res.json(await q1(`update payments set status='failed' where id=$1 and status='pending' returning *`, [req.params.id]));
 }));
 
@@ -183,6 +291,12 @@ router.get('/coverage/:regionId', asyncH(async (req, res) => {
   res.json(await q(`select d.id,d.name,d.active,(select count(*)::int from wards w where w.district_id=d.id) wards,
     (select count(distinct a.user_id)::int from fundi_areas a join users u on u.id=a.user_id and u.fundi_status='approved' where a.district_id=d.id) fundis
     from districts d where d.region_id=$1 order by d.name`, [req.params.regionId]));
+}));
+router.get('/coverage/district/:id/wards', asyncH(async (req, res) => {
+  res.json(await q(
+    `select w.id, w.name, (select count(distinct a.user_id)::int from fundi_areas a join users u on u.id=a.user_id and u.fundi_status='approved'
+       where a.district_id=w.district_id and (a.ward_id is null or a.ward_id=w.id)) fundis
+     from wards w where w.district_id=$1 order by w.name`, [req.params.id]));
 }));
 router.put('/regions/:id', asyncH(async (req, res) => res.json(await q1('update regions set active=$2 where id=$1 returning *', [req.params.id, !!req.body.active]))));
 router.put('/districts/:id', asyncH(async (req, res) => res.json(await q1('update districts set active=$2 where id=$1 returning *', [req.params.id, !!req.body.active]))));
