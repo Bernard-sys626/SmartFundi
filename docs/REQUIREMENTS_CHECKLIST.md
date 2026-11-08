@@ -17,9 +17,9 @@ Done = implemented. Tested = covered by backend/test/smoke.js. App screens are u
 | Nauli rule when cancelled after arrival | Done, Tested |
 | In-app chat, call, WhatsApp, SMS | Done (chat Tested) |
 | Notifications (in-app + Firebase push) | In-app Tested; push needs Firebase setup |
-| Admin: fundis, jobs, payments, services, areas, regional admins | Done, Tested |
+| SmartFundi Admin as a separate app (dashboard, customers, fundis, companies, jobs, payments + commission, add admins, statistics and reports) | Done, Tested (server) |
 | Languages Kiswahili / English / Francais | Done (French admin texts fall back to English where missing) |
 | Mobile Money / Bank / Lipa Namba real payments | Needs a provider account (see README) |
 | Google Sign-In | Button only |
 | Full Tanzania wards list | Sample data + import tool |
-| APK via GitHub Actions | Workflow written, not yet run |
+| APKs via GitHub Actions (SmartFundi + SmartFundi Admin) | Workflow written, not yet run |

@@ -12,7 +12,7 @@ async function call(method, path, body, token, form) {
   return { s: r.status, j };
 }
 async function login(identifier, extra = {}) {
-  const a = await call('POST', '/auth/request-otp', { identifier });
+  const a = await call('POST', '/auth/request-otp', { identifier, app: extra.app });
   const r = await call('POST', '/auth/verify-otp', { identifier, code: a.j.dev_code, ...extra });
   return { token: r.j.token, user: r.j.user };
 }
@@ -23,10 +23,14 @@ async function upload(token, name, buf, type) {
 (async () => {
   const sfx = String(Date.now()).slice(-6);
   console.log('Auth and roles');
-  const admin = await login('0740586160');
+  const admin = await login('0740586160', { app: 'admin' });
   ok(admin.user.role === 'admin' && admin.user.is_main_admin, 'admin phone is detected automatically as main admin');
   const client = await login('07' + sfx + '11', { name: 'Asha Mteja' });
   ok(client.user.role === 'client', 'new user becomes client');
+  const adminInMain = await call('POST', '/auth/request-otp', { identifier: '0740586160' });
+  ok(adminInMain.s === 403 && adminInMain.j.error === 'use_admin_app', 'admin number is refused in the Client/Fundi app');
+  const strangerInAdmin = await call('POST', '/auth/request-otp', { identifier: '0799' + sfx, app: 'admin' });
+  ok(strangerInAdmin.s === 403 && strangerInAdmin.j.error === 'not_admin', 'unknown number is refused in the Admin app and no account is created');
   const bad = await call('POST', '/auth/verify-otp', { identifier: '0711000000', code: '000000' });
   ok(bad.s === 400, 'wrong OTP rejected');
 
@@ -160,7 +164,7 @@ async function upload(token, name, buf, type) {
   const svc = await call('POST', '/admin/services', { name_sw: 'Mabomba', name_en: 'Plumbing', trade: 'plumbing' }, admin.token);
   ok(svc.j.trade === 'plumbing', 'admin can add a new service (future trades)');
   const reg = await call('POST', '/admin/admins', { identifier: '07' + sfx + '44', name: 'Msaidizi Mbeya', region_ids: [mbeya.id] }, admin.token);
-  const sub1 = await login('07' + sfx + '44');
+  const sub1 = await login('07' + sfx + '44', { app: 'admin' });
   ok(sub1.user.role === 'admin' && !sub1.user.is_main_admin, 'regional admin is auto-detected at login');
   const noMain = await call('PUT', '/admin/settings', { commission_percent: 50 }, sub1.token);
   ok(noMain.s === 403, 'regional admin cannot change commission');
@@ -168,6 +172,28 @@ async function upload(token, name, buf, type) {
   ok(forbid.s === 403, 'client cannot reach admin API');
   const imp = await call('POST', '/admin/locations/import', { rows: [{ region: 'Mbeya', district: 'Mbeya Jiji', ward: 'Kiwanja Mpaka' }] }, admin.token);
   ok(imp.j.imported === 1, 'location import works');
+
+  console.log('Admin app: customers, companies, reports');
+  const cl = (await call('GET', '/admin/clients?q=Asha', null, admin.token)).j;
+  const ashaRow = cl.find((c) => c.id === client.user.id);
+  ok(ashaRow && ashaRow.jobs_total >= 3 && ashaRow.spent === 100000, 'admin lists customers with job counts and amount spent');
+  const cd = (await call('GET', `/admin/clients/${client.user.id}`, null, admin.token)).j;
+  ok(cd.jobs.length >= 3, 'admin opens a customer with their jobs');
+  const blk = await call('POST', `/admin/clients/${client.user.id}/block`, { blocked: true }, admin.token);
+  const blocked = await call('GET', '/jobs', null, client.token);
+  ok(blk.j.blocked === true && blocked.s === 403 && blocked.j.error === 'blocked', 'blocked customer is locked out');
+  await call('POST', `/admin/clients/${client.user.id}/block`, { blocked: false }, admin.token);
+  const back = await call('GET', '/jobs', null, client.token);
+  ok(back.s === 200, 'customer can be unblocked');
+  const co = await call('POST', '/admin/fundis', { identifier: '07' + sfx + '55', name: 'Umeme Co', company_name: 'Umeme Co Ltd', fundi_type: 'company', areas: [{ region_id: mbeya.id, district_id: dist.id }], service_ids: [wiring.id] }, admin.token);
+  const companies = (await call('GET', '/admin/fundis?type=company', null, admin.token)).j;
+  ok(companies.length >= 1 && companies.every((f) => f.fundi_type === 'company') && companies.some((f) => f.id === co.j.user.id), 'admin filters companies');
+  const rep = (await call('GET', '/admin/reports?days=7', null, admin.token)).j;
+  ok(rep.jobs.total >= 3 && rep.jobs.completed >= 1 && rep.money.revenue === 100000, 'report totals: jobs and revenue');
+  ok(rep.money.platform === 23000 && rep.money.fundis === 77000, 'report commission split (8,000 + 15,000 platform)');
+  ok(rep.by_day.length === 7 && rep.by_service.length >= 1 && rep.top_fundis[0].completed === 1, 'report by day, by service and top fundis');
+  const repReg = (await call('GET', '/admin/reports?days=7', null, sub1.token)).j;
+  ok(repReg.jobs.total >= 3, 'regional admin report is limited to assigned regions');
 
   console.log(`\n${pass} passed, ${failN} failed`);
   process.exit(failN ? 1 : 0);

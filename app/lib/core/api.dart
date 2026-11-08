@@ -4,6 +4,9 @@ import 'package:http/http.dart' as http;
 /// Set at build time: --dart-define=API_BASE_URL=https://your-api.example.com/api
 const apiBase = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://10.0.2.2:8080/api');
 
+/// 'main' = Client/Fundi app, 'admin' = SmartFundi Admin app (set in the entry point).
+String appKind = 'main';
+
 class ApiError implements Exception {
   final int status; // 0 = network, -1 = local (gps, etc)
   final String code;

@@ -96,19 +96,29 @@ class _Dashboard extends StatelessWidget {
 
 // ===================================================================== fundis
 class _FundisPage extends StatefulWidget {
-  const _FundisPage();
+  final String? initialType;
+  final bool standalone;
+  const _FundisPage({this.initialType, this.standalone = false});
   @override
   State<_FundisPage> createState() => _FundisPageState();
 }
 
 class _FundisPageState extends State<_FundisPage> {
   String? filter = 'pending';
+  late String? type = widget.initialType;
   int rev = 0;
+
   @override
   Widget build(BuildContext context) {
     final filters = <String?>['pending', 'approved', 'rejected', 'suspended', null];
+    final types = <String?>[null, 'technician', 'company'];
+    String url() {
+      final q = <String>[if (filter != null) 'status=$filter', if (type != null) 'type=$type'];
+      return '/admin/fundis${q.isEmpty ? '' : '?${q.join('&')}'}';
+    }
+
     return Scaffold(
-      appBar: AppBar(title: Text(tr('fundis'))),
+      appBar: AppBar(title: Text(type == 'company' ? tr('companies') : tr('fundis'))),
       floatingActionButton: FloatingActionButton.extended(
         shape: const StadiumBorder(),
         icon: const Icon(Icons.person_add_alt_1),
@@ -122,14 +132,21 @@ class _FundisPageState extends State<_FundisPage> {
         SizedBox(
           height: 52,
           child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
+            for (final t in types)
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: ChoiceChip(shape: const StadiumBorder(), label: Text(t == null ? tr('all') : tr(t == 'company' ? 'companies' : 'pref_technician')), selected: type == t, onSelected: (_) => setState(() => type = t))),
+          ]),
+        ),
+        SizedBox(
+          height: 52,
+          child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
             for (final f in filters)
               Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: ChoiceChip(shape: const StadiumBorder(), label: Text(f == null ? tr('all') : tr('st_$f')), selected: filter == f, onSelected: (_) => setState(() => filter = f))),
           ]),
         ),
         Expanded(
           child: Loader<List<J>>(
-            key: ValueKey('$filter$rev'),
-            load: () async => asList(await Api.get('/admin/fundis${filter == null ? '' : '?status=$filter'}')),
+            key: ValueKey('$filter$type$rev'),
+            load: () async => asList(await Api.get(url())),
             builder: (c, list, reload) => list.isEmpty
                 ? EmptyView(tr('nothing_here'), icon: Icons.engineering_outlined)
                 : RefreshIndicator(
@@ -430,6 +447,9 @@ class _MorePage extends StatelessWidget {
             Text(tr(main ? 'main_admin' : 'regional_admin'), style: TextStyle(color: Theme.of(context).colorScheme.secondary)),
           ])),
         ])),
+        tile(Icons.people_outline, tr('customers'), const _ClientsPage()),
+        tile(Icons.business_outlined, tr('companies'), const _FundisPage(initialType: 'company', standalone: true)),
+        tile(Icons.bar_chart_rounded, tr('reports'), const _ReportsPage()),
         tile(Icons.map_outlined, tr('locations'), const _LocationsPage()),
         tile(Icons.electrical_services, tr('services'), const _ServicesPage()),
         tile(Icons.percent, tr('commission_payments'), const _CommissionPage()),
@@ -726,6 +746,214 @@ class _AdminsState extends State<_AdminsPage> {
             ),
         ]),
       ),
+    );
+  }
+}
+
+
+// ===================================================================== customers
+class _ClientsPage extends StatefulWidget {
+  const _ClientsPage();
+  @override
+  State<_ClientsPage> createState() => _ClientsState();
+}
+
+class _ClientsState extends State<_ClientsPage> {
+  String q = '';
+  int rev = 0;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('customers'))),
+      body: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: TextField(decoration: InputDecoration(hintText: tr('search_customers'), prefixIcon: const Icon(Icons.search)), onSubmitted: (v) => setState(() {
+                q = v.trim();
+                rev++;
+              })),
+        ),
+        Expanded(
+          child: Loader<List<J>>(
+            key: ValueKey('$q$rev'),
+            load: () async => asList(await Api.get('/admin/clients${q.isEmpty ? '' : '?q=${Uri.encodeQueryComponent(q)}'}')),
+            builder: (c, list, reload) => list.isEmpty
+                ? EmptyView(tr('nothing_here'), icon: Icons.people_outline)
+                : RefreshIndicator(
+                    onRefresh: reload,
+                    child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 24), children: [
+                      for (final u in list)
+                        AppCard(
+                          onTap: () async {
+                            await Navigator.push(c, MaterialPageRoute(builder: (_) => _ClientDetail(id: u['id'] as String)));
+                            reload();
+                          },
+                          child: Row(children: [
+                            Avatar(name: who(u)),
+                            const SizedBox(width: 12),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(who(u), style: const TextStyle(fontWeight: FontWeight.w800)),
+                              Text('${u['jobs_total']} ${tr('requests')}  |  ${money(u['spent'] as num)}', style: TextStyle(color: cs.secondary, fontSize: 12.5)),
+                            ])),
+                            if (u['blocked'] == true) StatusChip('blocked'),
+                          ]),
+                        ),
+                    ]),
+                  ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ClientDetail extends StatelessWidget {
+  final String id;
+  const _ClientDetail({required this.id});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('customer'))),
+      body: Loader<J>(
+        load: () async => asMap(await Api.get('/admin/clients/$id')),
+        builder: (c, d, reload) {
+          final u = asMap(d['client']);
+          final jobs = asList(d['jobs']);
+          final blocked = u['blocked'] == true;
+          return ListView(padding: const EdgeInsets.all(16), children: [
+            AppCard(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Avatar(name: who(u), size: 56),
+                  const SizedBox(width: 14),
+                  Expanded(child: Text(who(u), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800))),
+                  if (blocked) StatusChip('blocked'),
+                ]),
+                const Divider(height: 24),
+                RowInfo(tr('phone'), (u['phone'] ?? '-').toString()),
+                RowInfo('Email', (u['email'] ?? '-').toString()),
+                RowInfo(tr('joined'), fmtDate(u['created_at'])),
+                RowInfo(tr('requests'), '${jobs.length}'),
+                if (u['phone'] != null) ...[const SizedBox(height: 10), ContactRow(u['phone'].toString())],
+              ]),
+            ),
+            PillButton(tr(blocked ? 'unblock' : 'block'), outlined: true, danger: !blocked, icon: blocked ? Icons.lock_open : Icons.block, onPressed: () async {
+              if (!blocked && !await confirmDialog(c, tr('block'), tr('block_confirm'), danger: true)) return;
+              if (c.mounted && await busy(c, () async => await Api.post('/admin/clients/$id/block', {'blocked': !blocked}))) await reload();
+            }),
+            SectionTitle(tr('requests')),
+            if (jobs.isEmpty) EmptyView(tr('no_requests_yet'), icon: Icons.receipt_long_outlined),
+            for (final j in jobs) JobCard(j),
+          ]);
+        },
+      ),
+    );
+  }
+}
+
+// ===================================================================== reports
+class _ReportsPage extends StatefulWidget {
+  const _ReportsPage();
+  @override
+  State<_ReportsPage> createState() => _ReportsState();
+}
+
+class _ReportsState extends State<_ReportsPage> {
+  int days = 30;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    Widget stat(String label, String value) => Expanded(
+          child: AppCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 2),
+              Text(label, style: TextStyle(color: cs.secondary, fontSize: 12.5)),
+            ]),
+          ),
+        );
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('reports'))),
+      body: Column(children: [
+        SizedBox(
+          height: 52,
+          child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
+            for (final d in [7, 30, 90, 365])
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: ChoiceChip(shape: const StadiumBorder(), label: Text(tr('last_days', {'n': '$d'})), selected: days == d, onSelected: (_) => setState(() => days = d))),
+          ]),
+        ),
+        Expanded(
+          child: Loader<J>(
+            key: ValueKey(days),
+            load: () async => asMap(await Api.get('/admin/reports?days=$days')),
+            builder: (c, r, reload) {
+              final jobs = asMap(r['jobs']);
+              final money_ = asMap(r['money']);
+              final byDay = asList(r['by_day']);
+              final bySvc = asList(r['by_service']);
+              final byReg = asList(r['by_region']);
+              final top = asList(r['top_fundis']);
+              final maxJobs = byDay.fold<int>(1, (a, x) => (x['jobs'] as int) > a ? x['jobs'] as int : a);
+              final maxSvc = bySvc.fold<int>(1, (a, x) => (x['jobs'] as int) > a ? x['jobs'] as int : a);
+              final maxReg = byReg.fold<int>(1, (a, x) => (x['jobs'] as int) > a ? x['jobs'] as int : a);
+              Widget bar(String label, int v, int max) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(children: [
+                      Expanded(flex: 4, child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      Expanded(flex: 6, child: Stack(children: [
+                        Container(height: 10, decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(5))),
+                        FractionallySizedBox(widthFactor: v / max, child: Container(height: 10, decoration: BoxDecoration(color: cs.primary, borderRadius: BorderRadius.circular(5)))),
+                      ])),
+                      SizedBox(width: 36, child: Text('$v', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700))),
+                    ]),
+                  );
+              return RefreshIndicator(
+                onRefresh: reload,
+                child: ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 32), children: [
+                  Row(children: [stat(tr('revenue'), money(money_['revenue'] as num)), stat(tr('platform_commission'), money(money_['platform'] as num))]),
+                  Row(children: [stat(tr('paid_to_fundis'), money(money_['fundis'] as num)), stat(tr('completion_rate'), '${r['completion_rate']}%')]),
+                  Row(children: [stat(tr('requests'), '${jobs['total']}'), stat(tr('st_completed'), '${jobs['completed']}'), stat(tr('st_cancelled'), '${jobs['cancelled']}')]),
+                  Row(children: [stat(tr('new_clients'), '${r['new_clients']}'), stat(tr('new_fundis'), '${r['new_fundis']}')]),
+                  SectionTitle(tr('requests_per_day')),
+                  AppCard(
+                    child: SizedBox(
+                      height: 120,
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        for (final d in byDay.length > 60 ? byDay.sublist(byDay.length - 60) : byDay)
+                          Expanded(child: Tooltip(message: '${d['day']}: ${d['jobs']}', child: Container(margin: const EdgeInsets.symmetric(horizontal: .6), height: 4 + 112 * ((d['jobs'] as int) / maxJobs), decoration: BoxDecoration(color: cs.primary, borderRadius: BorderRadius.circular(3))))),
+                      ]),
+                    ),
+                  ),
+                  SectionTitle(tr('by_service')),
+                  AppCard(child: Column(children: [
+                    if (bySvc.isEmpty) Text(tr('nothing_here')),
+                    for (final x in bySvc) bar((x['name_$currentLang'] ?? x['name_en']).toString(), x['jobs'] as int, maxSvc),
+                  ])),
+                  SectionTitle(tr('by_region')),
+                  AppCard(child: Column(children: [
+                    if (byReg.isEmpty) Text(tr('nothing_here')),
+                    for (final x in byReg) bar(x['name'].toString(), x['jobs'] as int, maxReg),
+                  ])),
+                  SectionTitle(tr('top_fundis')),
+                  if (top.isEmpty) EmptyView(tr('nothing_here'), icon: Icons.engineering_outlined),
+                  for (var i = 0; i < top.length; i++)
+                    AppCard(
+                      child: Row(children: [
+                        CircleAvatar(radius: 16, backgroundColor: cs.primary.withOpacity(.14), child: Text('${i + 1}', style: TextStyle(color: cs.primary, fontWeight: FontWeight.w800))),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(top[i]['name'].toString(), style: const TextStyle(fontWeight: FontWeight.w800)),
+                          Text('${top[i]['completed']} ${tr('st_completed')}  |  ${money(top[i]['earned'] as num)}${top[i]['rating'] == null ? '' : '  |  ${top[i]['rating']}'}', style: TextStyle(color: cs.secondary, fontSize: 12.5)),
+                        ])),
+                      ]),
+                    ),
+                ]),
+              );
+            },
+          ),
+        ),
+      ]),
     );
   }
 }

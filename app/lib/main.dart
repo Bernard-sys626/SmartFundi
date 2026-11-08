@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/state.dart';
 import 'core/theme.dart';
-import 'screens/admin.dart';
 import 'screens/auth.dart';
 import 'screens/client.dart';
 import 'screens/fundi.dart';
@@ -46,7 +45,7 @@ class Root extends StatelessWidget {
     if (s.user == null) return const AuthScreen();
     switch (s.role) {
       case 'admin':
-        return const AdminShell();
+        return const UseAdminAppScreen();
       case 'fundi':
         return const FundiGate();
       default:

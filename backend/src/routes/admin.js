@@ -28,10 +28,10 @@ router.get('/fundis', asyncH(async (req, res) => {
   const rows = await q(
     `select u.id,u.name,u.phone,u.email,u.fundi_type,u.company_name,u.fundi_status,u.created_at,
        (select string_agg(distinct d.name, ', ') from fundi_areas a join districts d on d.id=a.district_id where a.user_id=u.id) districts
-     from users u where u.role='fundi' and ($1::text is null or u.fundi_status=$1)
+     from users u where u.role='fundi' and ($1::text is null or u.fundi_status=$1) and ($3::text is null or u.fundi_type=$3)
      and ($2::int[] is null or exists(select 1 from fundi_areas a where a.user_id=u.id and a.region_id = any($2)))
      order by case u.fundi_status when 'pending' then 0 else 1 end, u.created_at desc limit 300`,
-    [req.query.status || null, sc]);
+    [req.query.status || null, sc, req.query.type || null]);
   res.json(rows);
 }));
 router.get('/fundis/:id', asyncH(async (req, res) => {
@@ -70,6 +70,73 @@ router.put('/fundis/:id', asyncH(async (req, res) => {
 router.post('/fundis/:id/documents', asyncH(async (req, res) => {
   await q('insert into fundi_documents(user_id,kind,name,file_id) values($1,$2,$3,$4)', [req.params.id, req.body.kind || 'other', req.body.name || null, req.body.file_id]);
   res.json(await profile({ id: req.params.id }));
+}));
+
+
+// ---------- clients ----------
+router.get('/clients', asyncH(async (req, res) => {
+  const sc = await scope(req.user);
+  const term = req.query.q ? '%' + String(req.query.q).trim() + '%' : null;
+  res.json(await q(
+    `select u.id,u.name,u.phone,u.email,u.blocked,u.created_at,
+       (select count(*)::int from jobs j where j.client_id=u.id) jobs_total,
+       (select count(*)::int from jobs j where j.client_id=u.id and j.status='completed') jobs_completed,
+       (select coalesce(sum(p.amount),0)::float from payments p where p.client_id=u.id and p.status='success') spent
+     from users u where u.role='client' and ($1::int[] is null or u.region_id = any($1))
+       and ($2::text is null or u.name ilike $2 or u.phone ilike $2 or u.email ilike $2)
+     order by u.created_at desc limit 300`, [sc, term]));
+}));
+router.get('/clients/:id', asyncH(async (req, res) => {
+  const u = await q1(`select id,name,phone,email,blocked,created_at,region_id,district_id from users where id=$1 and role='client'`, [req.params.id]).catch(() => null);
+  if (!u) return fail(res, 404, 'not_found');
+  const rows = await q('select id from jobs where client_id=$1 order by created_at desc limit 30', [u.id]);
+  const jobs = [];
+  for (const r of rows) jobs.push(await jobView(r.id, req.user));
+  res.json({ client: u, jobs });
+}));
+router.post('/clients/:id/block', asyncH(async (req, res) => {
+  const r = await q1(`update users set blocked=$2 where id=$1 and role='client' returning id,blocked`, [req.params.id, !!req.body.blocked]);
+  if (!r) return fail(res, 404, 'not_found');
+  res.json(r);
+}));
+
+// ---------- reports ----------
+router.get('/reports', asyncH(async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days || '30', 10) || 30, 1), 365);
+  const sc = await scope(req.user);
+  const since = `now() - make_interval(days => $1)`;
+  const jobs = await q1(
+    `select count(*)::int total, count(*) filter (where status='completed')::int completed, count(*) filter (where status='cancelled')::int cancelled
+     from jobs where created_at >= ${since} and ($2::int[] is null or region_id = any($2))`, [days, sc]);
+  const money = await q1(
+    `select coalesce(sum(p.amount),0)::float revenue, coalesce(sum(p.platform_amount),0)::float platform, coalesce(sum(p.fundi_amount),0)::float fundis
+     from payments p join jobs j on j.id=p.job_id where p.status='success' and p.confirmed_at >= ${since} and ($2::int[] is null or j.region_id = any($2))`, [days, sc]);
+  const newClients = await q1(`select count(*)::int n from users where role='client' and created_at >= ${since}`, [days]);
+  const newFundis = await q1(`select count(*)::int n from users where role='fundi' and created_at >= ${since}`, [days]);
+  const byDay = await q(
+    `select to_char(d::date,'YYYY-MM-DD') as day,
+       (select count(*)::int from jobs j where j.created_at::date = d::date and ($2::int[] is null or j.region_id = any($2))) as jobs,
+       (select coalesce(sum(p.amount),0)::float from payments p join jobs j on j.id=p.job_id
+          where p.status='success' and p.confirmed_at::date = d::date and ($2::int[] is null or j.region_id = any($2))) as revenue
+     from generate_series(current_date::timestamp - make_interval(days => $1 - 1), current_date::timestamp, interval '1 day') d order by d`, [days, sc]);
+  const byService = await q(
+    `select s.key, s.name_sw, s.name_en, s.name_fr, count(*)::int jobs from jobs j join services s on s.id=j.service_id
+     where j.created_at >= ${since} and ($2::int[] is null or j.region_id = any($2)) group by s.id order by jobs desc`, [days, sc]);
+  const byRegion = await q(
+    `select r.name, count(*)::int jobs from jobs j join regions r on r.id=j.region_id
+     where j.created_at >= ${since} and ($2::int[] is null or j.region_id = any($2)) group by r.id order by jobs desc limit 15`, [days, sc]);
+  const top = await q(
+    `select u.id, coalesce(u.company_name,u.name,u.phone) name, u.fundi_type,
+       count(*) filter (where j.status='completed')::int completed,
+       coalesce((select sum(p.fundi_amount) from payments p join jobs jj on jj.id=p.job_id where jj.fundi_id=u.id and p.status='success' and p.confirmed_at >= ${since}),0)::float earned,
+       (select round(avg(r.rating)::numeric,1)::float from ratings r join jobs jj on jj.id=r.job_id where jj.fundi_id=u.id) rating
+     from users u join jobs j on j.fundi_id=u.id where j.created_at >= ${since} and ($2::int[] is null or j.region_id = any($2))
+     group by u.id order by completed desc, earned desc limit 10`, [days, sc]);
+  res.json({
+    days, jobs, money, new_clients: newClients.n, new_fundis: newFundis.n,
+    completion_rate: jobs.total ? Math.round((jobs.completed / jobs.total) * 100) : 0,
+    by_day: byDay, by_service: byService, by_region: byRegion, top_fundis: top,
+  });
 }));
 
 // ---------- jobs ----------

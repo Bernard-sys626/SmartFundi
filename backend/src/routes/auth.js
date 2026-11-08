@@ -10,52 +10,74 @@ const MAXR = Number(process.env.RATE_LIMIT_MAX || 10);
 const limiter = rateLimit({ windowMs: 60 * 1000, max: MAXR, standardHeaders: true, legacyHeaders: false });
 const verifyLimiter = rateLimit({ windowMs: 60 * 1000, max: MAXR * 2, standardHeaders: true, legacyHeaders: false });
 
+// Returns true when the code was handed to a provider. Throws when delivery fails.
 async function sendOtp(id, code) {
   const text = `SmartFundi: code yako ni ${code}. Your code is ${code}. Valid for 10 minutes.`;
   if (id.type === 'email') {
-    if (process.env.SMTP_URL) {
-      const mailer = require('nodemailer').createTransport(process.env.SMTP_URL);
-      await mailer.sendMail({ from: process.env.MAIL_FROM, to: id.value, subject: 'SmartFundi verification code', text });
-      return;
-    }
-  } else if (process.env.BEEM_API_KEY) {
-    const r = await fetch('https://apisms.beem.africa/v1/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Basic ' + Buffer.from(`${process.env.BEEM_API_KEY}:${process.env.BEEM_SECRET}`).toString('base64'),
-      },
-      body: JSON.stringify({
-        source_addr: process.env.BEEM_SENDER || 'SmartFundi',
-        schedule_time: '',
-        encoding: 0,
-        message: text,
-        recipients: [{ recipient_id: 1, dest_addr: id.value.replace('+', '') }],
-      }),
-    });
-    if (!r.ok) console.error('Beem SMS failed', r.status);
-    return;
+    if (!process.env.SMTP_URL) return false;
+    const mailer = require('nodemailer').createTransport(process.env.SMTP_URL);
+    await mailer.sendMail({ from: process.env.MAIL_FROM || 'SmartFundi <no-reply@smartfundi.app>', to: id.value, subject: 'SmartFundi verification code', text });
+    return true;
   }
-  console.log(`[OTP] ${id.value}: ${code}`);
+  if (!process.env.BEEM_API_KEY) return false;
+  const r = await fetch('https://apisms.beem.africa/v1/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Basic ' + Buffer.from(`${process.env.BEEM_API_KEY}:${process.env.BEEM_SECRET}`).toString('base64'),
+    },
+    body: JSON.stringify({
+      source_addr: process.env.BEEM_SENDER || 'SmartFundi',
+      schedule_time: '',
+      encoding: 0,
+      message: text,
+      recipients: [{ recipient_id: 1, dest_addr: id.value.replace('+', '') }],
+    }),
+  });
+  if (!r.ok) throw new Error('sms provider replied ' + r.status);
+  return true;
+}
+
+// The Client/Fundi app and the Admin app are separate apps. Admin phones must not log in to the
+// main app, and the Admin app must never create accounts.
+async function gate(res, id, app) {
+  const col = id.type === 'email' ? 'email' : 'phone';
+  const u = await q1(`select role from users where ${col}=$1`, [id.value]);
+  if (app === 'admin' && (!u || u.role !== 'admin')) { fail(res, 403, 'not_admin'); return false; }
+  if (app !== 'admin' && u && u.role === 'admin') { fail(res, 403, 'use_admin_app'); return false; }
+  return true;
 }
 
 router.post('/request-otp', limiter, asyncH(async (req, res) => {
   const id = normId(req.body.identifier);
   if (!id) return fail(res, 400, 'invalid_identifier');
+  if (!(await gate(res, id, req.body.app))) return;
   const code = String(crypto.randomInt(100000, 1000000));
   await q(
     `insert into otps(identifier,code_hash,expires_at,attempts) values($1,$2,now()+interval '10 minutes',0)
      on conflict(identifier) do update set code_hash=$2, expires_at=now()+interval '10 minutes', attempts=0`,
     [id.value, hash(code)]
   );
-  await sendOtp(id, code);
-  res.json({ ok: true, ...(process.env.DEV_OTP === 'true' ? { dev_code: code } : {}) });
+  const dev = process.env.DEV_OTP === 'true';
+  let delivered = false;
+  try {
+    delivered = await sendOtp(id, code);
+  } catch (e) {
+    console.error('[OTP] delivery failed:', e.message);
+    if (!dev) return fail(res, 502, 'otp_send_failed');
+  }
+  if (!delivered && !dev) {
+    console.error(`[OTP] no SMS/email provider configured, code for ${id.value} was NOT delivered`);
+    return fail(res, 503, 'otp_unavailable');
+  }
+  res.json({ ok: true, ...(dev ? { dev_code: code } : {}) });
 }));
 
 router.post('/verify-otp', verifyLimiter, asyncH(async (req, res) => {
   const id = normId(req.body.identifier);
   const code = String(req.body.code || '');
   if (!id) return fail(res, 400, 'invalid_identifier');
+  if (!(await gate(res, id, req.body.app))) return;
   const o = await q1('select * from otps where identifier=$1', [id.value]);
   if (!o || new Date(o.expires_at) < new Date()) return fail(res, 400, 'code_expired');
   if (o.attempts >= 5) return fail(res, 429, 'too_many_attempts');

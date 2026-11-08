@@ -3,7 +3,13 @@
 Adds permissions, url_launcher queries, the app label and a safe minSdk."""
 import re, sys, pathlib
 
-root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "android")
+import argparse
+ap = argparse.ArgumentParser()
+ap.add_argument("root", nargs="?", default="android")
+ap.add_argument("--label", default="SmartFundi")
+ap.add_argument("--app-id", default=None)
+args = ap.parse_args()
+root = pathlib.Path(args.root)
 man = root / "app/src/main/AndroidManifest.xml"
 s = man.read_text()
 
@@ -30,7 +36,7 @@ if 'android:scheme="sms"' not in s:
     else:
         s = s.replace("</manifest>", "    <queries>" + queries + "\n    </queries>\n</manifest>", 1)
 
-s = re.sub(r'android:label="[^"]*"', 'android:label="SmartFundi"', s, count=1)
+s = re.sub(r'android:label="[^"]*"', f'android:label="{args.label}"', s, count=1)
 man.write_text(s)
 
 for name in ("app/build.gradle", "app/build.gradle.kts"):
@@ -39,5 +45,8 @@ for name in ("app/build.gradle", "app/build.gradle.kts"):
         g = f.read_text()
         g = re.sub(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 23", g)
         g = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 23", g)
+        if args.app_id:
+            g = re.sub(r'applicationId\s*=\s*"[^"]+"', f'applicationId = "{args.app_id}"', g)
+            g = re.sub(r'applicationId\s+"[^"]+"', f'applicationId "{args.app_id}"', g)
         f.write_text(g)
 print("Android project patched")
