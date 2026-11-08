@@ -59,6 +59,23 @@ jobs:
           flutter create --platforms=android --project-name smartfundi --org tz.smartfundi .
           rm -rf test
           python3 ../tools/patch_android.py android --label "${{ matrix.label }}" --app-id "${{ matrix.app_id }}"
+          
+      - name: Optimize Gradle download
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/gradle/wrapper/gradle-wrapper.properties")
+          s = p.read_text()
+          s = s.replace("-all.zip", "-bin.zip")
+
+          if "networkTimeout=" not in s:
+              s += "\nnetworkTimeout=120000\n"
+
+          p.write_text(s)
+          print("Gradle download optimized successfully")
+          PY
+
 
       - name: Install packages and app icon
         run: |
