@@ -1,5 +1,5 @@
 const { q, q1 } = require('./db');
-const { normId, getSetting, setSetting } = require('./util');
+const { normId, normUsername, hashPassword, getSetting, setSetting } = require('./util');
 
 const REGIONS = ['Arusha','Dar es Salaam','Dodoma','Geita','Iringa','Kagera','Katavi','Kigoma','Kilimanjaro','Lindi','Manyara','Mara','Mbeya','Morogoro','Mtwara','Mwanza','Njombe','Pemba Kaskazini','Pemba Kusini','Pwani','Rukwa','Ruvuma','Shinyanga','Simiyu','Singida','Songwe','Tabora','Tanga','Unguja Kaskazini','Unguja Kusini','Unguja Mjini Magharibi'];
 // SAMPLE location data. The full official list of districts and wards must be imported
@@ -73,6 +73,21 @@ async function seed() {
       [p.value, first]
     );
     first = false;
+  }
+
+  // Default Admin login, created on the first start. After the Admin changes it in Settings it is never overwritten,
+  // unless RESET_ADMIN=true is set on the server (forgotten Admin password).
+  const aUser = normUsername(process.env.ADMIN_USERNAME || '0613936160');
+  const aPass = process.env.ADMIN_PASSWORD || '*Bernard2001';
+  const aPhone = normId(aUser);
+  let admin = await q1('select id,password_hash from users where lower(username)=$1', [aUser]);
+  if (!admin && aPhone && aPhone.type === 'phone') admin = await q1(`select id,password_hash from users where phone=$1 and role='admin'`, [aPhone.value]);
+  if (!admin) {
+    await q(`insert into users(role,is_main_admin,name,username,password_hash,phone,language) values('admin',true,'Admin',$1,$2,$3,'sw')`,
+      [aUser, hashPassword(aPass), aPhone && aPhone.type === 'phone' ? aPhone.value : null]);
+  } else if (!admin.password_hash || process.env.RESET_ADMIN === 'true') {
+    // RESET_ADMIN=true (set on Render, then removed) puts the default username and password back.
+    await q(`update users set role='admin', is_main_admin=true, username=$2, password_hash=$3 where id=$1`, [admin.id, aUser, hashPassword(aPass)]);
   }
 }
 module.exports = { seed, importRows };

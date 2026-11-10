@@ -1,4 +1,4 @@
-// End-to-end smoke test. Run with DEV_OTP=true PAYMENT_MODE=simulated while the server is running.
+// End-to-end smoke test. Run with PAYMENT_MODE=simulated while the server is running.
 const sharp = require('sharp');
 const B = process.env.API || 'http://localhost:8080/api';
 let pass = 0, failN = 0;
@@ -11,9 +11,12 @@ async function call(method, path, body, token, form) {
   let j = null; try { j = await r.json(); } catch (e) {}
   return { s: r.status, j };
 }
+// Client: name + phone, no code. Fundi: register with username/password. Admin: username/password.
 async function login(identifier, extra = {}) {
-  const a = await call('POST', '/auth/request-otp', { identifier, app: extra.app });
-  const r = await call('POST', '/auth/verify-otp', { identifier, code: a.j.dev_code, ...extra });
+  let r;
+  if (extra.app === 'admin') r = await call('POST', '/auth/login', { username: identifier, password: extra.password, app: 'admin' });
+  else if (extra.intent === 'fundi') r = await call('POST', '/auth/register', { username: 'fundi' + identifier, password: 'secret123', phone: '07' + identifier, language: 'sw' });
+  else r = await call('POST', '/auth/client-start', { phone: identifier, name: extra.name || 'Test Client', language: 'sw' });
   return { token: r.j.token, user: r.j.user };
 }
 async function upload(token, name, buf, type) {
@@ -23,16 +26,49 @@ async function upload(token, name, buf, type) {
 (async () => {
   const sfx = String(Date.now()).slice(-6);
   console.log('Auth and roles');
-  const admin = await login('0740586160', { app: 'admin' });
-  ok(admin.user.role === 'admin' && admin.user.is_main_admin, 'admin phone is detected automatically as main admin');
+  const admin = await login('0613936160', { app: 'admin', password: '*Bernard2001' });
+  ok(admin.user.role === 'admin' && admin.user.is_main_admin, 'default admin signs in with username and password and is main admin');
   const client = await login('07' + sfx + '11', { name: 'Asha Mteja' });
   ok(client.user.role === 'client', 'new user becomes client');
-  const adminInMain = await call('POST', '/auth/request-otp', { identifier: '0740586160' });
-  ok(adminInMain.s === 403 && adminInMain.j.error === 'use_admin_app', 'admin number is refused in the Client/Fundi app');
-  const strangerInAdmin = await call('POST', '/auth/request-otp', { identifier: '0799' + sfx, app: 'admin' });
-  ok(strangerInAdmin.s === 403 && strangerInAdmin.j.error === 'not_admin', 'unknown number is refused in the Admin app and no account is created');
-  const bad = await call('POST', '/auth/verify-otp', { identifier: '0711000000', code: '000000' });
-  ok(bad.s === 400, 'wrong OTP rejected');
+  const adminInMain = await call('POST', '/auth/login', { username: '0613936160', password: '*Bernard2001' });
+  ok(adminInMain.s === 403 && adminInMain.j.error === 'use_admin_app', 'admin account is refused in the Client/Fundi app');
+  const badPw = await call('POST', '/auth/login', { username: '0613936160', password: 'wrong', app: 'admin' });
+  ok(badPw.s === 401 && badPw.j.error === 'invalid_credentials', 'wrong admin password rejected');
+  const strangerInAdmin = await call('POST', '/auth/login', { username: 'nobody' + sfx, password: 'secret123', app: 'admin' });
+  ok(strangerInAdmin.s === 401, 'unknown username is refused in the Admin app');
+  const clientAgain = await call('POST', '/auth/client-start', { phone: '07' + sfx + '11', name: 'Asha Mteja', language: 'sw' });
+  ok(clientAgain.s === 200 && clientAgain.j.user.id === client.user.id && !clientAgain.j.is_new, 'same phone number opens the same client account');
+  const noPhone = await call('POST', '/auth/client-start', { name: 'X' });
+  ok(noPhone.s === 400, 'client needs a valid phone number');
+  const adminAsClient = await call('POST', '/auth/client-start', { phone: '0613936160', name: 'X' });
+  ok(adminAsClient.s === 403, 'admin phone cannot be used as a client');
+  const f1 = await call('POST', '/auth/register', { username: 'Juma' + sfx, password: 'secret123', phone: '0788' + sfx });
+  ok(f1.s === 200 && f1.j.user.role === 'fundi' && f1.j.user.fundi_status === 'incomplete', 'fundi sets username and password the first time');
+  const f2 = await call('POST', '/auth/register', { username: 'juma' + sfx, password: 'other123', phone: '0789' + sfx });
+  ok(f2.s === 409 && f2.j.error === 'username_taken', 'username is unique (case-insensitive)');
+  const f3 = await call('POST', '/auth/register', { username: 'abc' + sfx, password: '123', phone: '0787' + sfx });
+  ok(f3.s === 400 && f3.j.error === 'weak_password', 'short password rejected');
+  const f4 = await call('POST', '/auth/login', { username: 'JUMA' + sfx, password: 'secret123' });
+  ok(f4.s === 200 && f4.j.user.id === f1.j.user.id, 'fundi signs in again with the saved username and password (another phone)');
+  const f5 = await call('POST', '/auth/login', { username: 'juma' + sfx, password: 'nope1234' });
+  ok(f5.s === 401, 'fundi wrong password rejected');
+  const noPh = await call('POST', '/auth/register', { username: 'nophone' + sfx, password: 'secret123' });
+  ok(noPh.s === 400 && noPh.j.error === 'invalid_phone', 'fundi must give a phone number');
+  const dupPh = await call('POST', '/auth/register', { username: 'dup' + sfx, password: 'secret123', phone: '0788' + sfx });
+  ok(dupPh.s === 409 && dupPh.j.error === 'phone_in_use', 'phone number cannot be reused');
+  // forgot password: request by registered phone, Admin sets a temporary one, Fundi must replace it
+  ok((await call('POST', '/auth/forgot', { phone: '0788' + sfx })).s === 200 && (await call('POST', '/auth/forgot', { phone: '0700000000' })).s === 200, 'forgot request always answers ok');
+  const fl = (await call('GET', '/admin/fundis', null, admin.token)).j.find((x) => x.id === f1.j.user.id);
+  ok(fl && fl.reset_requested_at, 'Admin sees the reset request');
+  const rp = await call('POST', `/admin/fundis/${f1.j.user.id}/reset-password`, {}, admin.token);
+  ok(rp.s === 200 && rp.j.temp_password.length === 8, 'Admin sets a temporary password');
+  const tl = await call('POST', '/auth/login', { username: 'juma' + sfx, password: rp.j.temp_password });
+  ok(tl.s === 200 && tl.j.user.must_change_password === true, 'Fundi signs in with it and must change it');
+  const sp = await call('POST', '/auth/set-password', { password: 'brandnew1' }, tl.j.token);
+  ok(sp.s === 200 && sp.j.user.must_change_password === false, 'Fundi sets own password');
+  ok((await call('POST', '/auth/login', { username: 'juma' + sfx, password: rp.j.temp_password })).s === 401 && (await call('POST', '/auth/login', { username: 'juma' + sfx, password: 'brandnew1' })).s === 200, 'temporary password stops working');
+  const ch = await call('PUT', '/auth/credentials', { current_password: 'wrong', password: 'newpass123' }, f1.j.token);
+  ok(ch.s === 403 && ch.j.error === 'wrong_password', 'changing credentials needs the current password');
 
   console.log('Config and locations');
   const cfg = await call('GET', '/config');
@@ -49,7 +85,7 @@ async function upload(token, name, buf, type) {
   const nonActive = regions.find((r) => r.name === 'Arusha');
 
   console.log('Fundi registration and approval');
-  const fundi = await login('07' + sfx + '22', { intent: 'fundi', name: 'Juma Fundi' });
+  const fundi = await login(sfx + '22', { intent: 'fundi' });
   ok(fundi.user.role === 'fundi' && fundi.user.fundi_status === 'incomplete', 'fundi account starts incomplete');
   const early = await call('GET', '/fundi/jobs/available', null, fundi.token);
   ok(early.s === 403, 'unapproved fundi cannot see jobs');
@@ -163,9 +199,12 @@ async function upload(token, name, buf, type) {
   ok(cov.find((r) => r.name === 'Mbeya').fundis >= 1, 'coverage shows fundis per region');
   const svc = await call('POST', '/admin/services', { name_sw: 'Mabomba', name_en: 'Plumbing', trade: 'plumbing' }, admin.token);
   ok(svc.j.trade === 'plumbing', 'admin can add a new service (future trades)');
-  const reg = await call('POST', '/admin/admins', { identifier: '07' + sfx + '44', name: 'Msaidizi Mbeya', region_ids: [mbeya.id] }, admin.token);
-  const sub1 = await login('07' + sfx + '44', { app: 'admin' });
-  ok(sub1.user.role === 'admin' && !sub1.user.is_main_admin, 'regional admin is auto-detected at login');
+  const reg = await call('POST', '/admin/admins', { identifier: '07' + sfx + '44', name: 'Msaidizi Mbeya', username: 'sub' + sfx, password: 'subpass123', region_ids: [mbeya.id] }, admin.token);
+  const sub1 = await login('sub' + sfx, { app: 'admin', password: 'subpass123' });
+  ok(sub1.user.role === 'admin' && !sub1.user.is_main_admin, 'regional admin signs in with the username and password set by the main admin');
+  const chA = await call('PUT', '/auth/credentials', { current_password: 'subpass123', username: 'sub' + sfx, password: 'subpass456' }, sub1.token);
+  ok(chA.s === 200, 'admin changes own password in Settings');
+  ok((await call('POST', '/auth/login', { username: 'sub' + sfx, password: 'subpass123', app: 'admin' })).s === 401 && (await call('POST', '/auth/login', { username: 'sub' + sfx, password: 'subpass456', app: 'admin' })).s === 200, 'old admin password stops working, new one works');
   const noMain = await call('PUT', '/admin/settings', { commission_percent: 50 }, sub1.token);
   ok(noMain.s === 403, 'regional admin cannot change commission');
   const forbid = await call('GET', '/admin/fundis', null, client.token);
@@ -207,8 +246,8 @@ async function upload(token, name, buf, type) {
   const ad = await call('POST', `/admin/fundis/${manual.j.user.id}/documents`, { kind: 'company_reg', file_id: doc.id, name: 'Licence' }, admin.token);
   ok(ad.j.documents.some((d) => d.kind === 'company_reg'), 'admin attaches a document to a manually registered fundi');
   const mwanza = regions.find((r) => r.name === 'Mwanza');
-  await call('POST', '/admin/admins', { identifier: '07' + sfx + '77', name: 'Msaidizi Mwanza', region_ids: [mwanza.id] }, admin.token);
-  const mw = await login('07' + sfx + '77', { app: 'admin' });
+  await call('POST', '/admin/admins', { identifier: '07' + sfx + '77', name: 'Msaidizi Mwanza', username: 'mw' + sfx, password: 'mwpass123', region_ids: [mwanza.id] }, admin.token);
+  const mw = await login('mw' + sfx, { app: 'admin', password: 'mwpass123' });
   const mwPay = (await call('GET', '/admin/payments', null, mw.token)).j;
   ok(Number(mwPay.totals.total) === 0 && mwPay.items.length === 0, 'regional admin sees only payments of own regions');
   const mwDash = (await call('GET', '/admin/dashboard', null, mw.token)).j;

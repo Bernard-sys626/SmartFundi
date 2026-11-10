@@ -9,7 +9,7 @@ async function profile(u) {
   const user = await q1('select * from users where id=$1', [u.id]);
   return {
     user: {
-      id: user.id, name: user.name, phone: user.phone, email: user.email, fundi_type: user.fundi_type, company_name: user.company_name,
+      id: user.id, name: user.name, username: user.username, reset_requested_at: user.reset_requested_at, phone: user.phone, email: user.email, fundi_type: user.fundi_type, company_name: user.company_name,
       fundi_status: user.fundi_status, reject_reason: user.reject_reason, photo_file_id: user.photo_file_id, language: user.language,
     },
     areas: await q(

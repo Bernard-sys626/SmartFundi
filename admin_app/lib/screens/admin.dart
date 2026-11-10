@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:smartfundi_core/smartfundi_core.dart';
 import 'package:provider/provider.dart';
 
@@ -271,6 +272,8 @@ class _FundiDetail extends StatelessWidget {
                 RowInfo('Email', (u['email'] ?? '-').toString()),
                 RowInfo(tr('work_areas'), [for (final a in areas) [a['ward_name'], a['district_name']].whereType<String>().join(', ')].join(' | ')),
                 RowInfo(tr('services_you_offer'), names.join(', ')),
+                if (u['username'] != null) RowInfo(tr('username'), u['username'].toString()),
+                if (u['reset_requested_at'] != null) RowInfo(tr('reset_password'), tr('reset_requested')),
                 if ((u['reject_reason'] ?? '').toString().isNotEmpty) RowInfo(tr('reason'), u['reject_reason'].toString()),
                 if (u['phone'] != null) ...[const SizedBox(height: 10), ContactRow(u['phone'].toString())],
               ]),
@@ -298,6 +301,34 @@ class _FundiDetail extends StatelessWidget {
             const SizedBox(height: 10),
             if (st == 'approved') PillButton(tr('suspend'), outlined: true, danger: true, onPressed: () async {
               if (await confirmDialog(c, tr('suspend'), tr('suspend_confirm'), danger: true) && c.mounted) act('suspend');
+            }),
+            const SizedBox(height: 10),
+            PillButton(tr('reset_password'), outlined: true, icon: Icons.lock_reset, onPressed: () async {
+              if (!await confirmDialog(c, tr('reset_password'), tr('reset_password_confirm')) || !c.mounted) return;
+              Map? r;
+              final ok = await busy(c, () async {
+                r = await Api.post('/admin/fundis/$id/reset-password', {}) as Map;
+              });
+              if (!ok || r == null || !c.mounted) return;
+              await showDialog<void>(
+                context: c,
+                builder: (ctx) => AlertDialog(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+                  title: Text(tr('temp_password')),
+                  content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('temp_password_info')),
+                    const SizedBox(height: 14),
+                    Text('${tr('username')}: ${r!['username']}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    SelectableText('${tr('password')}: ${r!['temp_password']}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+                  ]),
+                  actions: [
+                    TextButton(onPressed: () { Clipboard.setData(ClipboardData(text: '${tr('username')}: ${r!['username']}\n${tr('password')}: ${r!['temp_password']}')); toast(c, tr('copied')); }, child: Text(tr('copy'))),
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ok'))),
+                  ],
+                ),
+              );
+              await reload();
             }),
             const SizedBox(height: 10),
             PillButton(tr('edit_details'), outlined: true, icon: Icons.edit_outlined, onPressed: () => _editFundi(c, p, reload)),
@@ -775,11 +806,15 @@ class _AdminsState extends State<_AdminsPage> {
     if (id == null || id.isEmpty || !c.mounted) return;
     final name = await inputSheet(c, title: tr('full_name'));
     if (name == null || !c.mounted) return;
+    final username = await inputSheet(c, title: tr('username'));
+    if (username == null || username.isEmpty || !c.mounted) return;
+    final password = await inputSheet(c, title: tr('password'));
+    if (password == null || password.isEmpty || !c.mounted) return;
     final regions = asList(await busyVal<List>(c, () async => await Api.get('/locations/regions') as List) ?? []);
     if (regions.isEmpty || !c.mounted) return;
     final sel = await multiPickSheet(c, tr('admin_regions'), [for (final r in regions) (r['id'] as int, r['name'] as String)], {});
     if (sel == null || !c.mounted) return;
-    if (await busy(c, () async => await Api.post('/admin/admins', {'identifier': id, 'name': name, 'region_ids': sel.toList()}))) setState(() => rev++);
+    if (await busy(c, () async => await Api.post('/admin/admins', {'identifier': id, 'name': name, 'username': username, 'password': password, 'region_ids': sel.toList()}))) setState(() => rev++);
   }
 
   @override

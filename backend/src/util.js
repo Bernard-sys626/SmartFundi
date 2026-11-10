@@ -1,6 +1,22 @@
 const jwt = require('jsonwebtoken');
 const { q, q1 } = require('./db');
+const crypto = require('crypto');
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+
+// ---------- username + password (Fundi/Company and Admin) ----------
+const normUsername = (s) => String(s || '').trim().toLowerCase();
+const validUsername = (s) => /^[^\s]{3,40}$/.test(s);
+const validPassword = (s) => typeof s === 'string' && s.length >= 6 && s.length <= 100;
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return salt + ':' + crypto.scryptSync(String(pw), salt, 64).toString('hex');
+}
+function checkPassword(pw, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, h] = stored.split(':');
+  const a = Buffer.from(h, 'hex'), b = crypto.scryptSync(String(pw), salt, 64);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 const asyncH = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch((e) => {
@@ -73,6 +89,7 @@ const TXT = {
     reassigned: ['Umepangiwa kazi', 'Umepangiwa kazi {code} na Admin.'],
     approved: ['Usajili umekubaliwa', 'Akaunti yako imeidhinishwa. Sasa unaweza kupokea kazi.'],
     rejected: ['Usajili umekataliwa', 'Maombi yako hayakukubaliwa. {reason}'],
+    reset_request: ['Ombi la kubadilisha password', '{name} ({phone}) amesahau password na anaomba kuwekewa mpya.'],
   },
   en: {
     job_accepted: ['Job accepted', '{name} accepted your job {code}.'],
@@ -88,6 +105,7 @@ const TXT = {
     reassigned: ['Job assigned to you', 'Admin assigned job {code} to you.'],
     approved: ['Registration approved', 'Your account is approved. You can now receive jobs.'],
     rejected: ['Registration rejected', 'Your application was not approved. {reason}'],
+    reset_request: ['Password reset request', '{name} ({phone}) forgot their password and asks for a new one.'],
   },
   fr: {
     job_accepted: ['Travail accepté', '{name} a accepté votre demande {code}.'],
@@ -103,6 +121,7 @@ const TXT = {
     reassigned: ['Travail attribué', 'L\'admin vous a attribué le travail {code}.'],
     approved: ['Inscription approuvée', 'Votre compte est approuvé. Vous pouvez recevoir des travaux.'],
     rejected: ['Inscription refusée', 'Votre demande n\'a pas été acceptée. {reason}'],
+    reset_request: ['Demande de nouveau mot de passe', '{name} ({phone}) a oublié son mot de passe et en demande un nouveau.'],
   },
 };
 function render(lang, key, vars) {
@@ -135,4 +154,4 @@ async function notify(userId, key, vars = {}, jobId = null) {
 }
 const money = (n) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
-module.exports = { asyncH, fail, sign, auth, role, mainAdmin, normId, haversine, getSetting, setSetting, notify, initFcm, money };
+module.exports = { normUsername, validUsername, validPassword, hashPassword, checkPassword, asyncH, fail, sign, auth, role, mainAdmin, normId, haversine, getSetting, setSetting, notify, initFcm, money };

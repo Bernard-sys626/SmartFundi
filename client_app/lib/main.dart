@@ -45,6 +45,7 @@ class Root extends StatelessWidget {
       case 'admin':
         return const UseAdminAppScreen();
       case 'fundi':
+        if (s.user!['must_change_password'] == true) return const ForceChangePasswordScreen();
         return const FundiGate();
       default:
         final u = s.user!;

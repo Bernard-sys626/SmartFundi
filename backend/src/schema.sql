@@ -63,3 +63,8 @@ CREATE INDEX IF NOT EXISTS msg_job_idx ON messages(job_id);
 CREATE INDEX IF NOT EXISTS notif_user_idx ON notifications(user_id);
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked boolean DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
+CREATE UNIQUE INDEX IF NOT EXISTS users_username_idx ON users(lower(username));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password boolean DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_requested_at timestamptz;

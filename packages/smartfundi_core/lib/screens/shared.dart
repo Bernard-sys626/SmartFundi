@@ -768,6 +768,34 @@ class SettingsPage extends StatelessWidget {
         ),
       );
 
+  /// Admin: change own username and/or password (asks for the current password).
+  Future<void> _changeCredentials(BuildContext c, AppState s) async {
+    final cur = TextEditingController(), user = TextEditingController(text: (s.user?['username'] ?? '').toString()), pass = TextEditingController();
+    final go = await showModalBottomSheet<bool>(
+      context: c, isScrollControlled: true, showDragHandle: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(24, 0, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr('change_credentials'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 16),
+          TextField(controller: cur, obscureText: true, autocorrect: false, enableSuggestions: false, decoration: InputDecoration(hintText: tr('current_password'), prefixIcon: const Icon(Icons.lock_outline))),
+          const SizedBox(height: 12),
+          TextField(controller: user, autocorrect: false, enableSuggestions: false, decoration: InputDecoration(hintText: tr('new_username'), prefixIcon: const Icon(Icons.person_outline))),
+          const SizedBox(height: 12),
+          TextField(controller: pass, obscureText: true, autocorrect: false, enableSuggestions: false, decoration: InputDecoration(hintText: tr('new_password'), prefixIcon: const Icon(Icons.lock_reset))),
+          const SizedBox(height: 16),
+          PillButton(tr('save'), onPressed: () => Navigator.pop(ctx, true)),
+        ]),
+      ),
+    );
+    if (go != true || !c.mounted) return;
+    final ok = await busy(c, () async {
+      await Api.put('/auth/credentials', {'current_password': cur.text, 'username': user.text.trim(), if (pass.text.isNotEmpty) 'password': pass.text});
+      await s.refreshMe();
+    });
+    if (ok) toast(c, tr('saved'));
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.watch<AppState>();
@@ -808,6 +836,8 @@ class SettingsPage extends StatelessWidget {
             });
             if (ok) toast(context, v['active'] == true ? tr('saved') : tr('err_area_not_available'));
           }, sub: s.locLabel.isEmpty ? tr('tap_to_set') : s.locLabel),
+        if (s.role == 'admin')
+          tile(Icons.lock_outline, tr('change_credentials'), () => _changeCredentials(context, s), sub: (u['username'] ?? '').toString()),
         tile(Icons.language, tr('language'), () async {
           final l = await pickSheet<String>(context, tr('language'), const [('sw', 'Kiswahili'), ('en', 'English'), ('fr', 'Français')]);
           if (l != null) s.setLang(l);

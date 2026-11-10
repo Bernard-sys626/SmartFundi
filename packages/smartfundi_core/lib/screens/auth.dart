@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import '../core/api.dart';
 import '../core/i18n.dart';
@@ -79,8 +78,10 @@ class LanguageScreen extends StatelessWidget {
   }
 }
 
-/// One login for everybody: phone or email with a verification code.
-/// The server decides if the account is Client, Fundi/Company or Admin.
+/// Entry screen.
+///  * Main app: two buttons. "Client" goes straight to the details form (no code). "Fundi / Company"
+///    asks for a username and password (created the first time, then used on any phone).
+///  * Admin app: username and password only.
 class AuthScreen extends StatefulWidget {
   final bool admin;
   const AuthScreen({super.key, this.admin = false});
@@ -89,25 +90,112 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthState extends State<AuthScreen> {
-  final _id = TextEditingController();
-  String intent = 'client';
+  final _user = TextEditingController();
+  final _pass = TextEditingController();
+  final _pass2 = TextEditingController();
+  final _phone = TextEditingController();
+  String intent = ''; // '' = choose, 'fundi' = username and password form
+  bool register = true; // fundi: first time = set username and password
+  bool hide = true;
 
-  Future<void> _request() async {
-    final id = _id.text.trim();
-    if (id.length < 5) return toast(context, tr('err_invalid_identifier'));
-    String? dev;
+  @override
+  void dispose() {
+    _user.dispose();
+    _pass.dispose();
+    _pass2.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final u = _user.text.trim(), p = _pass.text;
+    if (u.length < 3 || u.contains(' ')) return toast(context, tr('err_invalid_username'));
+    if (p.length < 6) return toast(context, tr('err_weak_password'));
+    final reg = !widget.admin && register;
+    if (reg && p != _pass2.text) return toast(context, tr('err_password_mismatch'));
+    if (reg && _phone.text.replaceAll(RegExp(r'[^0-9]'), '').length < 9) return toast(context, tr('err_invalid_phone'));
+    Map? res;
     final ok = await busy(context, () async {
-      final r = await Api.post('/auth/request-otp', {'identifier': id, 'app': appKind}) as Map;
-      dev = r['dev_code']?.toString();
+      res = await Api.post(reg ? '/auth/register' : '/auth/login', {
+        'username': u, 'password': p, 'app': appKind, 'language': context.read<AppState>().lang,
+        if (reg) 'phone': _phone.text.trim(),
+      }) as Map;
     });
-    if (!ok || !mounted) return;
-    final res = await showModalBottomSheet<Map>(
-      context: context, isScrollControlled: true, showDragHandle: true,
-      builder: (_) => _OtpSheet(identifier: id, intent: widget.admin ? 'client' : intent, devCode: dev),
-    );
-    if (res != null && mounted) {
-      context.read<AppState>().login(res['token'] as String, Map<String, dynamic>.from(res['user'] as Map));
+    if (ok && res != null && mounted) {
+      context.read<AppState>().login(res!['token'] as String, Map<String, dynamic>.from(res!['user'] as Map));
     }
+  }
+
+  /// Forgot password: the Fundi enters the phone number registered in the app. The request goes to the
+  /// Admins, who set a temporary password. Support numbers are shown so they can call.
+  Future<void> _forgot() async {
+    final s = context.read<AppState>();
+    final ph = await inputSheet(context, title: tr('forgot_password'), label: tr('phone_registered'), type: TextInputType.phone, action: tr('send_request'));
+    if (ph == null || ph.isEmpty || !mounted) return;
+    final ok = await busy(context, () async => await Api.post('/auth/forgot', {'phone': ph}));
+    if (!ok || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        title: Text(tr('request_sent')),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr('forgot_info')),
+          const SizedBox(height: 12),
+          for (final p in s.supportPhones) Padding(padding: const EdgeInsets.only(bottom: 4), child: Text(p, style: const TextStyle(fontWeight: FontWeight.w800))),
+        ]),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ok')))],
+      ),
+    );
+  }
+
+  Widget _credentials(ColorScheme cs) {
+    final reg = !widget.admin && register;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (!widget.admin)
+        SegmentedButton<bool>(
+          showSelectedIcon: false,
+          segments: [
+            ButtonSegment(value: true, label: Text(tr('first_time'))),
+            ButtonSegment(value: false, label: Text(tr('have_account'))),
+          ],
+          selected: {register},
+          onSelectionChanged: (v) => setState(() => register = v.first),
+        ),
+      if (!widget.admin) const SizedBox(height: 16),
+      if (reg) Padding(padding: const EdgeInsets.only(bottom: 14), child: Text(tr('set_credentials_hint'), style: TextStyle(color: cs.secondary, height: 1.4))),
+      TextField(
+        controller: _user, keyboardType: TextInputType.visiblePassword, autocorrect: false, enableSuggestions: false, textInputAction: TextInputAction.next,
+        decoration: InputDecoration(hintText: tr('username'), prefixIcon: const Icon(Icons.person_outline)),
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _pass, obscureText: hide, autocorrect: false, enableSuggestions: false,
+        textInputAction: reg ? TextInputAction.next : TextInputAction.done,
+        onSubmitted: reg ? null : (_) => _submit(),
+        decoration: InputDecoration(
+          hintText: tr('password'), prefixIcon: const Icon(Icons.lock_outline),
+          suffixIcon: IconButton(icon: Icon(hide ? Icons.visibility_off_outlined : Icons.visibility_outlined), onPressed: () => setState(() => hide = !hide)),
+        ),
+      ),
+      if (reg) ...[
+        const SizedBox(height: 12),
+        TextField(
+          controller: _phone, keyboardType: TextInputType.phone,
+          decoration: InputDecoration(hintText: tr('phone_registered'), prefixIcon: const Icon(Icons.phone_outlined)),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _pass2, obscureText: hide, autocorrect: false, enableSuggestions: false, onSubmitted: (_) => _submit(),
+          decoration: InputDecoration(hintText: tr('confirm_password'), prefixIcon: const Icon(Icons.lock_outline)),
+        ),
+        const SizedBox(height: 10),
+        Text(tr('remember_credentials'), style: TextStyle(color: cs.secondary, fontSize: 12.5, height: 1.4)),
+      ],
+      const SizedBox(height: 16),
+      PillButton(reg ? tr('create_account') : tr('login'), onPressed: _submit),
+      if (!reg && !widget.admin) TextButton(onPressed: _forgot, child: Text(tr('forgot_password'))),
+    ]);
   }
 
   @override
@@ -126,38 +214,18 @@ class _AuthState extends State<AuthScreen> {
           else
             Center(child: Text(tr('tagline'), style: TextStyle(color: cs.secondary))),
           const SizedBox(height: 32),
-          if (widget.admin) Padding(padding: const EdgeInsets.only(bottom: 16), child: Text(tr('admin_only'), textAlign: TextAlign.center, style: TextStyle(color: cs.secondary, height: 1.4))),
-          if (!widget.admin) SegmentedButton<String>(
-            showSelectedIcon: false,
-            segments: [
-              ButtonSegment(value: 'client', label: Text(tr('i_am_client'))),
-              ButtonSegment(value: 'fundi', label: Text(tr('i_am_fundi'))),
-            ],
-            selected: {intent},
-            onSelectionChanged: (v) => setState(() => intent = v.first),
-            style: ButtonStyle(shape: WidgetStatePropertyAll(const StadiumBorder()), minimumSize: const WidgetStatePropertyAll(Size(0, 48))),
-          ),
-          if (!widget.admin) const SizedBox(height: 20),
-          TextField(
-            controller: _id, keyboardType: TextInputType.emailAddress,
-            decoration: InputDecoration(hintText: tr('phone_or_email'), prefixIcon: const Icon(Icons.person_outline)),
-            onSubmitted: (_) => _request(),
-          ),
-          const SizedBox(height: 16),
-          PillButton(tr('get_code'), onPressed: _request),
-          if (!widget.admin) ...[
-          const SizedBox(height: 20),
-          Row(children: [const Expanded(child: Divider()), Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: Text(tr('or'))), const Expanded(child: Divider())]),
-          const SizedBox(height: 20),
-          OutlinedButton(
-            onPressed: () => toast(context, tr('google_soon')),
-            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52), shape: const StadiumBorder(), side: BorderSide(color: cs.outline)),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              SvgPicture.asset('assets/google_g.svg', width: 20, height: 20),
-              const SizedBox(width: 12),
-              Text(tr('continue_google'), style: const TextStyle(fontWeight: FontWeight.w600)),
-            ]),
-          ),
+          if (widget.admin) ...[
+            Padding(padding: const EdgeInsets.only(bottom: 16), child: Text(tr('admin_only'), textAlign: TextAlign.center, style: TextStyle(color: cs.secondary, height: 1.4))),
+            _credentials(cs),
+          ] else if (intent.isEmpty) ...[
+            // "Client" goes straight to the details form (no code). "Fundi or Company" asks for username and password.
+            PillButton(tr('i_am_client'), icon: Icons.person_outline, onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ClientStartScreen()))),
+            const SizedBox(height: 14),
+            PillButton(tr('i_am_fundi'), icon: Icons.engineering_outlined, outlined: true, onPressed: () => setState(() => intent = 'fundi')),
+          ] else ...[
+            Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: () => setState(() => intent = ''), icon: const Icon(Icons.arrow_back), label: Text(tr('i_am_fundi')))),
+            const SizedBox(height: 8),
+            _credentials(cs),
           ],
           const SizedBox(height: 28),
           Center(child: TextButton(onPressed: () => context.read<AppState>().resetLang(), child: Text(tr('change_language')))),
@@ -167,51 +235,80 @@ class _AuthState extends State<AuthScreen> {
   }
 }
 
-class _OtpSheet extends StatefulWidget {
-  final String identifier, intent;
-  final String? devCode;
-  const _OtpSheet({required this.identifier, required this.intent, this.devCode});
+/// Client: fill in name, phone number and area, then go straight in. No verification code.
+/// The phone number identifies the client, so the same number on another phone opens the same account.
+class ClientStartScreen extends StatefulWidget {
+  const ClientStartScreen({super.key});
   @override
-  State<_OtpSheet> createState() => _OtpState();
+  State<ClientStartScreen> createState() => _ClientStartState();
 }
 
-class _OtpState extends State<_OtpSheet> {
-  late final _code = TextEditingController(text: widget.devCode ?? '');
+class _ClientStartState extends State<ClientStartScreen> {
+  String name = '', phone = '';
+  Map<String, dynamic>? loc;
 
-  Future<void> _verify() async {
+  Future<void> _go() async {
+    final s = context.read<AppState>();
     Map? res;
     final ok = await busy(context, () async {
-      res = await Api.post('/auth/verify-otp', {
-        'identifier': widget.identifier, 'code': _code.text.trim(), 'intent': widget.intent, 'app': appKind,
-        'language': context.read<AppState>().lang,
+      res = await Api.post('/auth/client-start', {
+        'name': name, 'phone': phone, 'language': s.lang, 'app': appKind,
+        'region_id': loc!['region_id'], 'district_id': loc!['district_id'], 'ward_id': loc!['ward_id'],
       }) as Map;
     });
-    if (ok && mounted) Navigator.pop(context, res);
-  }
-
-  Future<void> _resend() async {
-    final ok = await busy(context, () async => await Api.post('/auth/request-otp', {'identifier': widget.identifier, 'app': appKind}));
-    if (ok) toast(context, tr('code_sent'));
+    if (!ok || res == null || !mounted) return;
+    s.saveLocLabel(loc!['label'] as String);
+    if (loc!['active'] != true) toast(context, tr('err_area_not_available'));
+    // Back to the root screen, which becomes the client's home as soon as the user is set.
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    s.login(res!['token'] as String, Map<String, dynamic>.from(res!['user'] as Map));
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(24, 0, 24, MediaQuery.of(context).viewInsets.bottom + 24),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(tr('enter_code'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 6),
-        Text(tr('code_sent_to', {'id': widget.identifier}), style: TextStyle(color: Theme.of(context).colorScheme.secondary)),
-        const SizedBox(height: 16),
-        TextField(
-          controller: _code, autofocus: true, keyboardType: TextInputType.number, maxLength: 6,
-          textAlign: TextAlign.center, style: const TextStyle(fontSize: 26, letterSpacing: 8, fontWeight: FontWeight.w800),
-          decoration: const InputDecoration(counterText: ''),
+    final cs = Theme.of(context).colorScheme;
+    Widget step(IconData i, String title, String value, VoidCallback f, bool done) => AppCard(
+          onTap: f,
+          child: Row(children: [
+            CircleAvatar(backgroundColor: done ? const Color(0xFF2F855A) : cs.primary.withOpacity(.14), child: Icon(done ? Icons.check : i, color: done ? Colors.white : cs.primary)),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+              Text(value.isEmpty ? tr('tap_to_set') : value, style: TextStyle(color: cs.secondary)),
+            ])),
+            const Icon(Icons.chevron_right),
+          ]),
+        );
+    final phoneOk = phone.replaceAll(RegExp(r'[^0-9]'), '').length >= 9;
+    return Scaffold(
+      appBar: AppBar(),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const LogoMark(64),
+            const SizedBox(height: 20),
+            Text(tr('welcome'), style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text(tr('client_start_sub'), style: TextStyle(color: cs.secondary)),
+            const SizedBox(height: 24),
+            step(Icons.person_outline, tr('full_name'), name, () async {
+              final v = await inputSheet(context, title: tr('full_name'), initial: name, label: tr('full_name_hint'));
+              if (v != null && v.isNotEmpty) setState(() => name = v);
+            }, name.isNotEmpty),
+            step(Icons.phone_outlined, tr('phone'), phone, () async {
+              final v = await inputSheet(context, title: tr('phone'), initial: phone, type: TextInputType.phone, label: '07XX XXX XXX');
+              if (v != null && v.isNotEmpty) setState(() => phone = v);
+            }, phoneOk),
+            step(Icons.location_on_outlined, tr('your_area'), (loc?['label'] ?? '') as String, () async {
+              final v = await pickLocation(context);
+              if (v != null) setState(() => loc = v);
+            }, loc != null),
+            const Spacer(),
+            PillButton(tr('continue'), onPressed: name.isNotEmpty && phoneOk && loc != null ? _go : null),
+          ]),
         ),
-        const SizedBox(height: 12),
-        PillButton(tr('verify'), onPressed: _verify),
-        TextButton(onPressed: _resend, child: Text(tr('resend_code'))),
-      ]),
+      ),
     );
   }
 }
@@ -307,4 +404,57 @@ class UseAdminAppScreen extends StatelessWidget {
           ),
         ),
       );
+}
+
+/// Shown to a Fundi after an Admin reset the password: a new password must be chosen before continuing.
+class ForceChangePasswordScreen extends StatefulWidget {
+  const ForceChangePasswordScreen({super.key});
+  @override
+  State<ForceChangePasswordScreen> createState() => _ForceChangeState();
+}
+
+class _ForceChangeState extends State<ForceChangePasswordScreen> {
+  final _p1 = TextEditingController(), _p2 = TextEditingController();
+
+  @override
+  void dispose() {
+    _p1.dispose();
+    _p2.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_p1.text.length < 6) return toast(context, tr('err_weak_password'));
+    if (_p1.text != _p2.text) return toast(context, tr('err_password_mismatch'));
+    final s = context.read<AppState>();
+    final ok = await busy(context, () async {
+      final r = await Api.post('/auth/set-password', {'password': _p1.text}) as Map;
+      s.setUser(Map<String, dynamic>.from(r['user'] as Map));
+    });
+    if (ok && mounted) toast(context, tr('saved'));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: SafeArea(
+        child: ListView(padding: const EdgeInsets.all(24), children: [
+          const SizedBox(height: 24),
+          const Center(child: LogoMark(80)),
+          const SizedBox(height: 20),
+          Text(tr('set_new_password'), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Text(tr('set_new_password_sub'), style: TextStyle(color: cs.secondary, height: 1.4)),
+          const SizedBox(height: 24),
+          TextField(controller: _p1, obscureText: true, autocorrect: false, enableSuggestions: false, decoration: InputDecoration(hintText: tr('password'), prefixIcon: const Icon(Icons.lock_outline))),
+          const SizedBox(height: 12),
+          TextField(controller: _p2, obscureText: true, autocorrect: false, enableSuggestions: false, onSubmitted: (_) => _save(), decoration: InputDecoration(hintText: tr('confirm_password'), prefixIcon: const Icon(Icons.lock_outline))),
+          const SizedBox(height: 20),
+          PillButton(tr('save'), onPressed: _save),
+          Center(child: TextButton(onPressed: () => context.read<AppState>().logout(), child: Text(tr('logout')))),
+        ]),
+      ),
+    );
+  }
 }

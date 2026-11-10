@@ -1,6 +1,7 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const { q, q1 } = require('../db');
-const { asyncH, fail, auth, role, mainAdmin, normId, getSetting, setSetting, notify } = require('../util');
+const { asyncH, fail, auth, role, mainAdmin, normId, normUsername, validUsername, validPassword, hashPassword, getSetting, setSetting, notify } = require('../util');
 const { jobView, confirmPayment } = require('./jobs');
 const { saveProfile, profile } = require('./fundi');
 const { importRows } = require('../seed');
@@ -44,7 +45,7 @@ router.get('/dashboard', asyncH(async (req, res) => {
 router.get('/fundis', asyncH(async (req, res) => {
   const sc = await scope(req.user);
   const rows = await q(
-    `select u.id,u.name,u.phone,u.email,u.fundi_type,u.company_name,u.fundi_status,u.created_at,
+    `select u.id,u.name,u.phone,u.email,u.fundi_type,u.company_name,u.fundi_status,u.created_at,u.reset_requested_at,
        (select string_agg(distinct d.name, ', ') from fundi_areas a join districts d on d.id=a.district_id where a.user_id=u.id) districts
      from users u where u.role='fundi' and ($1::text is null or u.fundi_status=$1) and ($3::text is null or u.fundi_type=$3)
      and ($2::int[] is null or exists(select 1 from fundi_areas a where a.user_id=u.id and a.region_id = any($2)))
@@ -78,6 +79,23 @@ router.post('/fundis', asyncH(async (req, res) => {
     [id.value, b.name || null, b.fundi_type === 'company' ? 'company' : 'technician', b.company_name || null, b.approve === false ? 'pending' : 'approved']);
   await saveProfile(u.id, b);
   res.json(await profile(u));
+}));
+// Forgotten password: sets a temporary one (shown once to the Admin, who passes it to the Fundi).
+// The Fundi is forced to choose their own at the next sign-in.
+router.post('/fundis/:id/reset-password', asyncH(async (req, res) => {
+  if (!(await fundiAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
+  const u = await q1(`select id,username,phone from users where id=$1 and role='fundi'`, [req.params.id]).catch(() => null);
+  if (!u) return fail(res, 404, 'not_found');
+  const ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let temp = '';
+  for (let i = 0; i < 8; i++) temp += ABC[crypto.randomInt(ABC.length)];
+  let username = u.username;
+  if (!username) { // Fundi added by an Admin has no login yet: the phone number becomes the username
+    username = (u.phone || '').replace(/\D/g, '') || 'fundi' + String(u.id).slice(0, 6);
+    if (await q1('select 1 x from users where lower(username)=$1', [username])) username += crypto.randomInt(100, 999);
+  }
+  await q('update users set username=$2, password_hash=$3, must_change_password=true, reset_requested_at=null where id=$1', [u.id, username, hashPassword(temp)]);
+  res.json({ username, temp_password: temp });
 }));
 router.put('/fundis/:id', asyncH(async (req, res) => {
   if (!(await fundiAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
@@ -322,7 +340,21 @@ router.post('/admins', mainAdmin, asyncH(async (req, res) => {
   const id = normId(req.body.identifier);
   if (!id) return fail(res, 400, 'invalid_identifier');
   const col = id.type === 'email' ? 'email' : 'phone';
-  const u = await q1(`insert into users(role,${col},name) values('admin',$1,$2) on conflict(${col}) do update set role='admin', name=coalesce($2,users.name) returning id`, [id.value, req.body.name || null]);
+  // The new admin signs in with a username and password chosen here (they can change it in Settings).
+  const username = req.body.username ? normUsername(req.body.username) : null;
+  if (username && !validUsername(username)) return fail(res, 400, 'invalid_username');
+  if (req.body.password && !validPassword(req.body.password)) return fail(res, 400, 'weak_password');
+  if (username && !req.body.password) return fail(res, 400, 'weak_password');
+  let u;
+  try {
+    u = await q1(`insert into users(role,${col},name,username,password_hash) values('admin',$1,$2,$3,$4)
+                  on conflict(${col}) do update set role='admin', name=coalesce($2,users.name),
+                  username=coalesce($3,users.username), password_hash=coalesce($4,users.password_hash) returning id`,
+      [id.value, req.body.name || null, username, username ? hashPassword(req.body.password) : null]);
+  } catch (e) {
+    if (e.code === '23505') return fail(res, 409, 'username_taken');
+    throw e;
+  }
   await q('delete from admin_regions where user_id=$1', [u.id]);
   for (const r of req.body.region_ids || []) await q('insert into admin_regions(user_id,region_id) values($1,$2) on conflict do nothing', [u.id, r]);
   res.json({ ok: true, id: u.id });

@@ -21,8 +21,8 @@ so either one can be built and released without touching the other. Only the sha
 ## What is built
 
 * Language choice on first launch (Kiswahili, English, Francais), animated splash with the logo, light and night mode.
-* Login with phone or email + verification code. The server decides the role. Admin phones cannot sign in to the
-  Client/Fundi app, and the Admin app refuses any number that is not an Admin (it never creates accounts).
+* Client: name + phone, no code. Fundi/Company: username + password set the first time. Admin: username + password in the Admin app. Admin accounts cannot sign in to the
+  Client/Fundi app, and the Admin app refuses any account that is not an Admin (it never creates accounts).
   The Google button is in place but disabled (see "Not done yet").
 * **Client**: Home, My Requests, Alerts, Messages, Settings. Report a problem in 4 popup-style steps
   (service, description + photos, area + GPS, review with the mandatory nauli message). Track the job
@@ -77,33 +77,22 @@ google-services.json and copy the four values above. Without them the app still 
 | `JWT_SECRET` | yes | Long random string |
 | `ADMIN_PHONES` | yes | Comma separated. The first number is the Main Admin (default `+255740586160,+255613936160`) |
 | `PAYMENT_MODE` | yes | `manual` (Admin confirms payments) or `simulated` (auto success, testing only) |
-| `BEEM_API_KEY`, `BEEM_SECRET`, `BEEM_SENDER` | for SMS | Beem Africa SMS for verification codes. Without it codes are only written to the server log |
-| `SMTP_URL`, `MAIL_FROM` | for email codes | e.g. `smtps://user:pass@smtp.host` |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | no | Default Admin login created on the first start (defaults: `0613936160` / `*Bernard2001`). Change it in the Admin app: Settings |
 | `FIREBASE_SERVICE_ACCOUNT` | for push | Base64 of the Firebase service account JSON (`base64 -w0 key.json`) |
 | `PAYMENT_WEBHOOK_SECRET` | with a payment provider | Header `x-webhook-secret` for `POST /api/payments/webhook` |
 | `ARRIVAL_RADIUS_M` | no | GPS distance accepted for "I have arrived" (default 300) |
 | `LANDING_URL` | no | Website opened from "Read more" in Privacy and Terms |
-| `DEV_OTP` | testing only | `true` returns the code in the API response. Keep `false` in production |
 
-## Verification codes (important)
+## Signing in (no verification codes)
 
-The app asks the server to send a code by SMS (phone) or email. **The server only sends codes after you configure a provider**,
-otherwise it answers with a clear error ("verification code service is not switched on") instead of pretending it was sent.
-
-* **Email codes (quickest, free):** set `SMTP_URL` on the backend. Examples:
-  Gmail with an app password: `smtps://yourname%40gmail.com:APP_PASSWORD@smtp.gmail.com:465`
-  (Google account > Security > 2-Step Verification > App passwords), or Brevo / Resend / any SMTP host.
-  Also set `MAIL_FROM`.
-* **SMS codes:** create a Beem Africa account, register a sender ID, then set `BEEM_API_KEY`, `BEEM_SECRET`, `BEEM_SENDER`.
-  Check the delivery log on the server if a phone does not receive anything.
-* **Only while testing:** `DEV_OTP=true` makes the server return the code and the app fills it in automatically.
-  Never leave this on in production, anyone could log in as anyone.
-* The Admin phones in `ADMIN_PHONES` also need working delivery to sign in the first time.
+* **Client:** taps "Client", fills in name, phone number and area, and goes straight in. The same phone number opens the same account on another phone.
+* **Fundi / Company:** the first time they choose a username and password ("First time"). After that they sign in with them ("I have an account"), on any phone. If the password is forgotten they tap "I forgot my password" and enter the phone number they registered with. Every Admin gets a notification; the Admin opens the Fundi in the Admin app and taps "Set new password", gives the temporary password to the Fundi (who is told to call support to confirm identity), and the Fundi must choose their own at the next sign-in.
+* **Admin (Admin app):** signs in with a username and password. On the first start the server creates the default Admin (`ADMIN_USERNAME` / `ADMIN_PASSWORD`, default `0613936160` / `*Bernard2001`). The Admin can change both in the app under Settings > Change username and password. Once changed, the default is never written back. If the Admin forgets the password, set `RESET_ADMIN=true` on Render (Environment), redeploy, sign in with the default `ADMIN_USERNAME` / `ADMIN_PASSWORD`, then **remove `RESET_ADMIN`** (otherwise the default is restored on every restart) and change the password in Settings. Other admins are added by the Main Admin with their own username and password.
 
 ## What was tested, and what was not
 
 * **Tested (71 checks, all passing):** `backend/test/smoke.js` runs the whole flow against a real Postgres:
-  OTP login and role detection, location data, fundi registration and approval, uploads and WebP conversion,
+  client, fundi and admin sign-in, location data, fundi registration and approval, uploads and WebP conversion,
   job creation rules, matching and notifications, accept race, GPS arrival check, quotation, partial and full
   payment with the 80/20 split, commission change, receipts, earnings, rating, nauli rule, admin controls,
   regional admin permissions and region scoping of payments, jobs and fundis, Admin/Client app separation, customers, companies filter, reports, ward availability, full fundi editing. It also runs in GitHub Actions (`backend-test.yml`).
@@ -117,7 +106,6 @@ otherwise it answers with a clear error ("verification code service is not switc
   The app already records payments, splits commission and issues receipts. In `manual` mode the Admin confirms
   each payment. When you choose a provider, connect it to `POST /api/payments/webhook` (and add the
   request-to-pay call in `backend/src/routes/jobs.js`, route `/:id/pay`).
-* **SMS delivery** uses the Beem Africa API format and has not been tried against a live account.
 * **Google Sign-In** is shown as a button only (it needs a Google Cloud OAuth client).
 * **Tanzania locations.** All 31 regions are loaded, but only a small sample of districts and wards
   (Mbeya, Mwanza and a few others). Import the full official list: Admin app > More > Locations > import icon

@@ -27,6 +27,6 @@ git push
 ## Checks that avoid most errors
 * `.github/workflows` must be at the repository ROOT (not inside a `smartfundi/` sub folder).
 * After the push, Render redeploys the API by itself. Open `https://smartfundi-api.onrender.com/health` and wait for `{"ok":true}`.
-* On Render > Environment, add a verification-code provider (`SMTP_URL` or the Beem variables) or, for testing only, `DEV_OTP=true`.
+* Sign-in no longer uses verification codes. The default Admin (`0613936160` / `*Bernard2001`) is created on the first start; change the password in the Admin app > Settings.
 * Uninstall the old SmartFundi APK from the phone before installing a new one (debug-signed builds from different runs cannot update each other). Your data is on the server and is not lost.
 * Red failed steps matter; yellow deprecation notices in the log are normal and harmless.
