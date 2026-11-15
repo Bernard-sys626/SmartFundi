@@ -7,6 +7,7 @@ const { initFcm } = require('./util');
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors());
+try { app.use(require('compression')()); } catch (e) { /* optional */ }
 app.use(express.json({ limit: '1mb' }));
 app.get('/health', (req, res) => res.json({ ok: true }));
 app.use('/api/auth', require('./routes/auth').router);
@@ -14,6 +15,8 @@ app.use('/api', require('./routes/common'));
 app.use('/api/jobs', require('./routes/jobs').router);
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/fundi', require('./routes/fundi').router);
+app.use('/api/directory', require('./routes/directory'));
+app.use('/api/boq', require('./routes/boq'));
 app.use('/api/admin', require('./routes/admin'));
 app.use((err, req, res, next) => {
   if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_request' });

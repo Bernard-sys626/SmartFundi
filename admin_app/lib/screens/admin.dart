@@ -15,7 +15,7 @@ class _AdminShellState extends State<AdminShell> {
   Widget build(BuildContext context) {
     context.watch<AppState>();
     return Scaffold(
-      body: IndexedStack(index: idx, children: const [_Dashboard(), _FundisPage(), _AdminJobs(), _PaymentsPage(), _MorePage()]),
+      body: LazyIndexedStack(index: idx, builders: [() => const _Dashboard(), () => const _FundisPage(), () => const _AdminJobs(), () => const _PaymentsPage(), () => const _MorePage()]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: idx,
         onDestinationSelected: (i) => setState(() => idx = i),
@@ -196,7 +196,10 @@ Future<void> _editFundi(BuildContext c, J p, Future<void> Function() reload) asy
     ('email', 'Email'),
     ('type', tr('account_type')),
     ('areas', tr('work_areas')),
+    ('categories', tr('your_categories')),
     ('services', tr('services_you_offer')),
+    ('experience', tr('experience')),
+    ('rating', tr('admin_rating')),
   ]);
   if (what == null || !c.mounted) return;
   switch (what) {
@@ -227,10 +230,23 @@ Future<void> _editFundi(BuildContext c, J p, Future<void> Function() reload) asy
       } else {
         await put({'areas': payload(remove: int.parse(act.substring(2)))});
       }
+    case 'categories':
+      final cats = c.read<AppState>().categories;
+      final r = await multiPickSheet(c, tr('your_categories'), [for (final x in cats) (x['id'] as int, (x['name_$currentLang'] ?? x['name_en']).toString())], {for (final x in (p['category_ids'] as List? ?? [])) x as int});
+      if (r != null && c.mounted) await put({'category_ids': r.toList()});
     case 'services':
-      final svc = c.read<AppState>().services;
+      final app = c.read<AppState>();
+      final have = {for (final x in (p['category_ids'] as List? ?? [])) x as int};
+      final svc = [for (final sv in app.services) if (have.isEmpty || have.contains(sv['category_id'])) sv];
       final r = await multiPickSheet(c, tr('services_you_offer'), [for (final sv in svc) (sv['id'] as int, svcName(sv))], {for (final x in (p['service_ids'] as List)) x as int});
       if (r != null && c.mounted) await put({'service_ids': r.toList()});
+    case 'experience':
+      final v = await inputSheet(c, title: tr('experience'), label: tr('experience_hint'), initial: (u['experience'] ?? '').toString(), maxLines: 5);
+      if (v != null && c.mounted) await put({'experience': v});
+    case 'rating':
+      // stars given by the Admin: shown to clients and to the Fundi (0 to 5, halves allowed)
+      final v = await pickSheet<double>(c, tr('admin_rating'), [for (var i = 10; i >= 1; i--) (i / 2, '${i / 2} / 5'), (-1.0, tr('no_rating'))]);
+      if (v != null && c.mounted) await put({'admin_rating': v < 0 ? '' : v});
   }
 }
 
@@ -271,7 +287,10 @@ class _FundiDetail extends StatelessWidget {
                 RowInfo(tr('phone'), (u['phone'] ?? '-').toString()),
                 RowInfo('Email', (u['email'] ?? '-').toString()),
                 RowInfo(tr('work_areas'), [for (final a in areas) [a['ward_name'], a['district_name']].whereType<String>().join(', ')].join(' | ')),
+                RowInfo(tr('your_categories'), [for (final x in s.categories) if (((p['category_ids'] as List?) ?? []).contains(x['id'])) (x['name_$currentLang'] ?? x['name_en']).toString()].join(', ')),
                 RowInfo(tr('services_you_offer'), names.join(', ')),
+                RowInfo(tr('experience'), (u['experience'] ?? '-').toString()),
+                if (u['admin_rating'] != null) Padding(padding: const EdgeInsets.only(top: 4), child: Row(children: [Text(tr('admin_rating'), style: TextStyle(color: cs.secondary)), const Spacer(), Stars((u['admin_rating'] as num).toDouble())])),
                 if (u['username'] != null) RowInfo(tr('username'), u['username'].toString()),
                 if (u['reset_requested_at'] != null) RowInfo(tr('reset_password'), tr('reset_requested')),
                 if ((u['reject_reason'] ?? '').toString().isNotEmpty) RowInfo(tr('reason'), u['reject_reason'].toString()),
@@ -545,7 +564,11 @@ class _MorePage extends StatelessWidget {
         tile(Icons.business_outlined, tr('companies'), const _FundisPage(initialType: 'company', standalone: true)),
         tile(Icons.bar_chart_rounded, tr('reports'), const _ReportsPage()),
         tile(Icons.map_outlined, tr('locations'), const _LocationsPage()),
+        if (main) tile(Icons.category_outlined, tr('categories'), const _CategoriesPage()),
         tile(Icons.electrical_services, tr('services'), const _ServicesPage()),
+        tile(Icons.table_chart_outlined, tr('boq'), const BoqListPage(admin: true)),
+        if (main) tile(Icons.perm_media_outlined, tr('media'), const _MediaPage()),
+        if (main) tile(Icons.edit_note, tr('content_editor'), const _ContentPage()),
         tile(Icons.percent, tr('commission_payments'), const _CommissionPage()),
         if (main) tile(Icons.admin_panel_settings_outlined, tr('admins'), const _AdminsPage()),
         tile(Icons.settings_outlined, tr('settings'), const SettingsPage()),
@@ -571,8 +594,17 @@ class _ServicesState extends State<_ServicesPage> {
     if (en == null || !c.mounted) return;
     final fr = await inputSheet(c, title: '${tr('service_name')} (Français)', initial: (sv?['name_fr'] ?? '').toString());
     if (fr == null || !c.mounted) return;
-    final body = {'name_sw': sw, 'name_en': en.isEmpty ? sw : en, 'name_fr': fr.isEmpty ? (en.isEmpty ? sw : en) : fr};
-    if (await busy(c, () async => sv == null ? await Api.post('/admin/services', body) : await Api.put('/admin/services/${sv['id']}', body))) setState(() => rev++);
+    int? cat = sv?['category_id'] as int?;
+    if (sv == null) {
+      final cats = c.read<AppState>().categories;
+      cat = await pickSheet<int>(c, tr('category'), [for (final x in cats) (x['id'] as int, (x['name_$currentLang'] ?? x['name_en']).toString())]);
+      if (cat == null || !c.mounted) return;
+    }
+    final body = {'name_sw': sw, 'name_en': en.isEmpty ? sw : en, 'name_fr': fr.isEmpty ? (en.isEmpty ? sw : en) : fr, if (cat != null) 'category_id': cat};
+    if (await busy(c, () async => sv == null ? await Api.post('/admin/services', body) : await Api.put('/admin/services/${sv['id']}', body))) {
+      await c.read<AppState>().loadServices();
+      setState(() => rev++);
+    }
   }
 
   @override
@@ -1119,6 +1151,228 @@ class _DistrictState extends State<_DistrictPage> {
                     ),
                 ]),
               ),
+      ),
+    );
+  }
+}
+
+
+// ----- categories (umeme, mechanics, plumbing ... the Admin can add more)
+class _CategoriesPage extends StatefulWidget {
+  const _CategoriesPage();
+  @override
+  State<_CategoriesPage> createState() => _CategoriesState();
+}
+
+class _CategoriesState extends State<_CategoriesPage> {
+  int rev = 0;
+  Future<void> _edit([J? cat]) async {
+    final c = context;
+    final sw = await inputSheet(c, title: '${tr('category_name')} (Kiswahili)', initial: (cat?['name_sw'] ?? '').toString());
+    if (sw == null || sw.isEmpty || !c.mounted) return;
+    final en = await inputSheet(c, title: '${tr('category_name')} (English)', initial: (cat?['name_en'] ?? '').toString());
+    if (en == null || !c.mounted) return;
+    final fr = await inputSheet(c, title: '${tr('category_name')} (Français)', initial: (cat?['name_fr'] ?? '').toString());
+    if (fr == null || !c.mounted) return;
+    final icon = await pickSheet<String>(c, tr('icon'), const [('bolt', 'Umeme / Electrical'), ('car_repair', 'Gari / Auto'), ('plumbing', 'Mabomba / Plumbing'), ('handyman', 'Handyman'), ('construction', 'Construction'), ('build', 'Build')]);
+    if (!c.mounted) return;
+    final body = {'name_sw': sw, 'name_en': en.isEmpty ? sw : en, 'name_fr': fr.isEmpty ? (en.isEmpty ? sw : en) : fr, if (icon != null) 'icon': icon};
+    final ok = await busy(c, () async => cat == null ? await Api.post('/admin/categories', body) : await Api.put('/admin/categories/${cat['id']}', body));
+    if (ok && c.mounted) {
+      await c.read<AppState>().loadCategories();
+      setState(() => rev++);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('categories'))),
+      floatingActionButton: FloatingActionButton.extended(shape: const StadiumBorder(), onPressed: () => _edit(), icon: const Icon(Icons.add), label: Text(tr('add_category'))),
+      body: Loader<List<J>>(
+        key: ValueKey(rev),
+        load: () async => asList(await Api.get('/admin/categories')),
+        builder: (c, list, reload) => ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 96), children: [
+          Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(tr('categories_hint'), style: TextStyle(color: Theme.of(c).colorScheme.secondary))),
+          for (final x in list)
+            AppCard(
+              child: Row(children: [
+                Expanded(child: Text((x['name_$currentLang'] ?? x['name_en']).toString(), style: const TextStyle(fontWeight: FontWeight.w800))),
+                Switch(value: x['active'] == true, onChanged: (v) async {
+                  if (await busy(c, () async => await Api.put('/admin/categories/${x['id']}', {'active': v})) && c.mounted) {
+                    await c.read<AppState>().loadCategories();
+                    setState(() => rev++);
+                  }
+                }),
+                IconButton(icon: const Icon(Icons.edit_outlined), onPressed: () => _edit(x)),
+              ]),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ----- pictures and short videos for the Home page and the Help pages
+class _MediaPage extends StatefulWidget {
+  const _MediaPage();
+  @override
+  State<_MediaPage> createState() => _MediaState();
+}
+
+class _MediaState extends State<_MediaPage> {
+  int rev = 0;
+  Future<void> _add() async {
+    final c = context;
+    final place = await pickSheet<String>(c, tr('media_place'), [('home', tr('media_home')), ('help_client', tr('media_help_client')), ('help_fundi', tr('media_help_fundi'))]);
+    if (place == null || !c.mounted) return;
+    final path = await pickDocument(c); // any picture or short video
+    if (path == null || !c.mounted) return;
+    final title = await inputSheet(c, title: tr('media_title'), label: tr('optional'));
+    if (!c.mounted) return;
+    final ok = await busy(c, () async => await Api.uploadMedia(path, place, title ?? ''));
+    if (ok) setState(() => rev++);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('media'))),
+      floatingActionButton: FloatingActionButton.extended(shape: const StadiumBorder(), onPressed: _add, icon: const Icon(Icons.upload), label: Text(tr('upload'))),
+      body: Loader<List<J>>(
+        key: ValueKey(rev),
+        load: () async => asList(await Api.get('/admin/media')),
+        builder: (c, list, reload) => list.isEmpty
+            ? EmptyView(tr('no_media'), icon: Icons.perm_media_outlined)
+            : ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 96), children: [
+                Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(tr('media_hint'), style: TextStyle(color: cs.secondary))),
+                for (final m in list)
+                  AppCard(
+                    child: Row(children: [
+                      SizedBox(
+                        width: 72, height: 54,
+                        child: m['kind'] == 'video'
+                            ? Container(decoration: BoxDecoration(color: brandBlue, borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.play_arrow, color: Colors.white))
+                            : FileImg(m['file_id'] as String, w: 72, h: 54, radius: 10, thumb: 200),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text((m['title'] ?? '').toString().isEmpty ? tr(m['kind'] == 'video' ? 'media_video' : 'media_image') : m['title'].toString(), style: const TextStyle(fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        Text(tr('media_${m['placement']}'), style: TextStyle(color: cs.secondary, fontSize: 12.5)),
+                      ])),
+                      Switch(value: m['active'] == true, onChanged: (v) async {
+                        if (await busy(c, () async => await Api.put('/admin/media/${m['id']}', {'active': v}))) setState(() => rev++);
+                      }),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () async {
+                          if (!await confirmDialog(c, tr('delete'), tr('delete_media_confirm'), danger: true) || !c.mounted) return;
+                          if (await busy(c, () async => await Api.delete('/admin/media/${m['id']}'))) setState(() => rev++);
+                        },
+                      ),
+                    ]),
+                  ),
+              ]),
+      ),
+    );
+  }
+}
+
+// ----- About text, contact numbers and payment numbers (with the registered names)
+class _ContentPage extends StatefulWidget {
+  const _ContentPage();
+  @override
+  State<_ContentPage> createState() => _ContentState();
+}
+
+class _ContentState extends State<_ContentPage> {
+  int rev = 0;
+  @override
+  Widget build(BuildContext context) {
+    final app = context.read<AppState>();
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: Text(tr('content_editor'))),
+      body: Loader<J>(
+        key: ValueKey(rev),
+        load: () async => asMap(await Api.get('/admin/settings')),
+        builder: (c, st, reload) {
+          final about = asMap(st['about']);
+          final text = about['text'] is Map ? asMap(about['text']) : <String, dynamic>{};
+          final accounts = [for (final a in (st['payment_accounts'] as List? ?? [])) asMap(a)];
+          Future<void> save(Map<String, dynamic> body) async {
+            if (await busy(c, () async => await Api.put('/admin/settings', body))) {
+              await app.loadConfig();
+              setState(() => rev++);
+            }
+          }
+
+          Future<void> editText(String lang, String name) async {
+            final v = await inputSheet(c, title: '${tr('about_us')} ($name)', initial: (text[lang] ?? '').toString(), maxLines: 8);
+            if (v == null || !c.mounted) return;
+            save({'about': {...about, 'text': {...text, lang: v}}});
+          }
+
+          Future<void> editAccount([int? i]) async {
+            final a = i == null ? <String, dynamic>{} : accounts[i];
+            final label = await inputSheet(c, title: tr('account_label'), label: 'M-Pesa, Tigo Pesa, Airtel Money, CRDB...', initial: (a['label'] ?? '').toString());
+            if (label == null || label.isEmpty || !c.mounted) return;
+            final number = await inputSheet(c, title: tr('account_number'), initial: (a['number'] ?? '').toString(), type: TextInputType.phone);
+            if (number == null || number.isEmpty || !c.mounted) return;
+            final name = await inputSheet(c, title: tr('account_name'), initial: (a['name'] ?? '').toString());
+            if (name == null || !c.mounted) return;
+            final next = [...accounts];
+            final item = {'label': label, 'number': number, 'name': name};
+            if (i == null) {
+              next.add(item);
+            } else {
+              next[i] = item;
+            }
+            save({'payment_accounts': next});
+          }
+
+          return ListView(padding: const EdgeInsets.all(16), children: [
+            SectionTitle(tr('about_us')),
+            for (final l in const [('sw', 'Kiswahili'), ('en', 'English'), ('fr', 'Français')])
+              AppCard(
+                onTap: () => editText(l.$1, l.$2),
+                child: Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(l.$2, style: const TextStyle(fontWeight: FontWeight.w800)),
+                    Text((text[l.$1] ?? '').toString().isEmpty ? tr('tap_to_set') : text[l.$1].toString(), maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: cs.secondary)),
+                  ])),
+                  const Icon(Icons.edit_outlined, size: 18),
+                ]),
+              ),
+            SectionTitle(tr('contact_numbers')),
+            AppCard(
+              onTap: () async {
+                final v = await inputSheet(c, title: tr('contact_numbers'), label: tr('contact_numbers_hint'), initial: ((about['phones'] as List?) ?? []).join(', '));
+                if (v == null || !c.mounted) return;
+                save({'about': {...about, 'phones': [for (final x in v.split(RegExp(r'[,;\n]')) ) if (x.trim().isNotEmpty) x.trim()]}});
+              },
+              child: Row(children: [
+                Expanded(child: Text(((about['phones'] as List?) ?? []).join('\n'), style: const TextStyle(fontWeight: FontWeight.w700))),
+                const Icon(Icons.edit_outlined, size: 18),
+              ]),
+            ),
+            SectionTitle(tr('payment_accounts')),
+            Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(tr('payment_accounts_hint'), style: TextStyle(color: cs.secondary, fontSize: 12.5))),
+            for (var i = 0; i < accounts.length; i++)
+              AppCard(
+                onTap: () => editAccount(i),
+                child: Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${accounts[i]['label']}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                    Text('${accounts[i]['number']}  -  ${accounts[i]['name']}'),
+                  ])),
+                  IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => save({'payment_accounts': [...accounts]..removeAt(i)})),
+                ]),
+              ),
+            PillButton(tr('add_payment_account'), icon: Icons.add, outlined: true, onPressed: () => editAccount()),
+          ]);
+        },
       ),
     );
   }

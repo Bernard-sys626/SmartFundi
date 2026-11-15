@@ -68,3 +68,52 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_idx ON users(lower(username));
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password boolean DEFAULT false;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_requested_at timestamptz;
+
+-- ===================== v2: categories, multi-service jobs, directory, BOQ, media, content =====================
+-- A client phone number may be shared by several clients (someone can use another person's phone). Only staff accounts keep unique phones.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_key;
+CREATE UNIQUE INDEX IF NOT EXISTS users_phone_staff_idx ON users(phone) WHERE role <> 'client';
+CREATE INDEX IF NOT EXISTS users_phone_idx ON users(phone);
+
+CREATE TABLE IF NOT EXISTS categories(
+  id serial PRIMARY KEY, key text UNIQUE, name_sw text, name_en text, name_fr text,
+  icon text DEFAULT 'build', active boolean DEFAULT true, sort int DEFAULT 0);
+ALTER TABLE services ADD COLUMN IF NOT EXISTS category_id int REFERENCES categories(id);
+CREATE TABLE IF NOT EXISTS fundi_categories(user_id uuid REFERENCES users(id) ON DELETE CASCADE, category_id int REFERENCES categories(id) ON DELETE CASCADE, PRIMARY KEY(user_id,category_id));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS experience text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_rating numeric(2,1);
+
+ALTER TABLE jobs DROP CONSTRAINT IF EXISTS jobs_preference_check;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS category_id int REFERENCES categories(id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS other_service text;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS ward_text text;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS target_fundi_id uuid REFERENCES users(id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS client_hidden boolean DEFAULT false;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resent_at timestamptz;
+ALTER TABLE jobs ALTER COLUMN description DROP NOT NULL;
+ALTER TABLE jobs ALTER COLUMN lat DROP NOT NULL;
+CREATE TABLE IF NOT EXISTS job_services(job_id uuid REFERENCES jobs(id) ON DELETE CASCADE, service_id int REFERENCES services(id), PRIMARY KEY(job_id,service_id));
+CREATE INDEX IF NOT EXISTS jobs_target_idx ON jobs(target_fundi_id);
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS txn_ref text;
+
+CREATE TABLE IF NOT EXISTS media(
+  id serial PRIMARY KEY, placement text NOT NULL DEFAULT 'home', kind text NOT NULL DEFAULT 'image',
+  file_id uuid, title text, sort int DEFAULT 0, active boolean DEFAULT true, created_at timestamptz DEFAULT now());
+
+-- BOQ: the master list is edited by Admin (changes for everybody); every Fundi/Company can keep own prices
+CREATE TABLE IF NOT EXISTS boq_items(
+  id serial PRIMARY KEY, kind text NOT NULL DEFAULT 'item' CHECK (kind IN ('section','group','item','sub')),
+  description text NOT NULL, unit text, rate numeric(16,2), sort int NOT NULL DEFAULT 0, active boolean DEFAULT true);
+CREATE TABLE IF NOT EXISTS boq_user_rates(user_id uuid REFERENCES users(id) ON DELETE CASCADE, item_id int REFERENCES boq_items(id) ON DELETE CASCADE, rate numeric(16,2) NOT NULL, PRIMARY KEY(user_id,item_id));
+CREATE TABLE IF NOT EXISTS boqs(
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id uuid REFERENCES users(id) ON DELETE CASCADE, job_id uuid REFERENCES jobs(id) ON DELETE SET NULL,
+  title text, client_name text, client_contact text, location text, tin text, installer_name text, installer_phone text,
+  lines jsonb NOT NULL DEFAULT '[]', total numeric(16,2) DEFAULT 0,
+  created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
+CREATE INDEX IF NOT EXISTS boqs_owner_idx ON boqs(owner_id);
+CREATE INDEX IF NOT EXISTS boqs_job_idx ON boqs(job_id);
+CREATE INDEX IF NOT EXISTS fundi_areas_user_idx ON fundi_areas(user_id);
+CREATE INDEX IF NOT EXISTS fundi_areas_district_idx ON fundi_areas(district_id);
+CREATE INDEX IF NOT EXISTS payments_job_idx ON payments(job_id);
+CREATE INDEX IF NOT EXISTS ratings_job_idx ON ratings(job_id);

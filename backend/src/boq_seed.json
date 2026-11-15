@@ -1,0 +1,320 @@
+{
+ "title": "BILLS OF QUANTITIES FOR ELECTRICAL INSTALLATION",
+ "rows": [
+  {
+   "kind": "section",
+   "description": "DISTRIBUTION SYSTEM",
+   "unit": null,
+   "rate": null,
+   "sort": 10
+  },
+  {
+   "kind": "item",
+   "description": "Single phase automatic change over switch 2 WAYS 63A as ABB make OR as approved equivalent",
+   "unit": "No",
+   "rate": 1560000.0,
+   "sort": 20
+  },
+  {
+   "kind": "item",
+   "description": "Three phase and neutral distribution body (DB) 6WAYS,18 MCBs c/w Three phase Circuit breaker 100A/300mA as ABB make OR as approved equivalent",
+   "unit": "No",
+   "rate": 2080000.0,
+   "sort": 30
+  },
+  {
+   "kind": "item",
+   "description": "Three phase and neutral distribution body (DB) 6WAYS,12 MCBs c/w Three phase Circuit breaker 100A/300mA as ABB make OR as approved equivalent",
+   "unit": "No",
+   "rate": 1950000.0,
+   "sort": 40
+  },
+  {
+   "kind": "item",
+   "description": "Main Distribution panel incomer 800A MCCB , 12 TPN outgoing 125A@12 MCCBs as ABB make OR as approved equivalent",
+   "unit": "No",
+   "rate": 23400000.0,
+   "sort": 50
+  },
+  {
+   "kind": "item",
+   "description": "Low Voltage Distribution panel incomer 250A MCCB , 6 TPN outgoing 100A@18 MCCBs as ABB make OR as approved equivalent",
+   "unit": "No",
+   "rate": 11700000.0,
+   "sort": 60
+  },
+  {
+   "kind": "section",
+   "description": "POWER POINTS",
+   "unit": null,
+   "rate": null,
+   "sort": 70
+  },
+  {
+   "kind": "item",
+   "description": "2 X 13A switch socket With multipurpose ports for plugging c/w steel box as TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 19500.0,
+   "sort": 80
+  },
+  {
+   "kind": "item",
+   "description": "Three phase socket Five pins with it isolator 45A,32A,16A asTRONIC make",
+   "unit": "No",
+   "rate": 325000.0,
+   "sort": 90
+  },
+  {
+   "kind": "item",
+   "description": "Single phase socket three pins with it isolator 45A,32A,16A asTRONIC make",
+   "unit": "No",
+   "rate": 130000.0,
+   "sort": 100
+  },
+  {
+   "kind": "section",
+   "description": "LIGHT FITTING AND FANS",
+   "unit": null,
+   "rate": null,
+   "sort": 110
+  },
+  {
+   "kind": "item",
+   "description": "4ft 1*18W complete fluorescent tube LED light as phillips make OR as approved equivalent",
+   "unit": "No",
+   "rate": 45500.0,
+   "sort": 120
+  },
+  {
+   "kind": "item",
+   "description": "Wall Mounted Security light complete with its energy saver LED 24W with round shape as PIEZO OR approved equivalent",
+   "unit": "No",
+   "rate": 71500.0,
+   "sort": 130
+  },
+  {
+   "kind": "item",
+   "description": "Ceiling fan and its regulator 56'' as phillips make OR as approved equivalent",
+   "unit": "No",
+   "rate": 520000.0,
+   "sort": 140
+  },
+  {
+   "kind": "section",
+   "description": "SWITCHES",
+   "unit": null,
+   "rate": null,
+   "sort": 150
+  },
+  {
+   "kind": "item",
+   "description": "10A 1 gang 1 way flush light switch c/w steel box as TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 6500.0,
+   "sort": 160
+  },
+  {
+   "kind": "item",
+   "description": "10A 2 gang 1 way flush light switch c/w steel box as TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 7800.0,
+   "sort": 170
+  },
+  {
+   "kind": "item",
+   "description": "10A 3 gang 1way flush light switch c/w steel box TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 9100.0,
+   "sort": 180
+  },
+  {
+   "kind": "item",
+   "description": "10A 1 gang 2 way flush light switch c/w steel box TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 9100.0,
+   "sort": 190
+  },
+  {
+   "kind": "item",
+   "description": "10A 2 gang 2 way flush light switch c/w steel box TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 11700.0,
+   "sort": 200
+  },
+  {
+   "kind": "item",
+   "description": "10A 3 gang 2way flush light switch c/w steel box TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 13000.0,
+   "sort": 210
+  },
+  {
+   "kind": "item",
+   "description": "10A Intermediate light switch c/w steel box TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 12350.0,
+   "sort": 220
+  },
+  {
+   "kind": "item",
+   "description": "25A photocell as TRONIC make OR as approved equivalent",
+   "unit": "No",
+   "rate": 78000.0,
+   "sort": 230
+  },
+  {
+   "kind": "section",
+   "description": "CABLES",
+   "unit": null,
+   "rate": null,
+   "sort": 240
+  },
+  {
+   "kind": "group",
+   "description": "1C x 1.5mm sq PVC copper cable as Euro make OR as approved equivalent",
+   "unit": null,
+   "rate": null,
+   "sort": 250
+  },
+  {
+   "kind": "sub",
+   "description": "(i)Red/Brown",
+   "unit": "mts",
+   "rate": 1235.0,
+   "sort": 260
+  },
+  {
+   "kind": "sub",
+   "description": "(ii) Black/Blue",
+   "unit": "mts",
+   "rate": 1235.0,
+   "sort": 270
+  },
+  {
+   "kind": "sub",
+   "description": "(ii)Yellow/Green",
+   "unit": "mts",
+   "rate": 1235.0,
+   "sort": 280
+  },
+  {
+   "kind": "group",
+   "description": "1C x 2.5mm sq PVC copper cable as Euro make OR as approved equivalent",
+   "unit": null,
+   "rate": null,
+   "sort": 290
+  },
+  {
+   "kind": "sub",
+   "description": "(i)Red/Brown",
+   "unit": "mts",
+   "rate": 1365.0,
+   "sort": 300
+  },
+  {
+   "kind": "sub",
+   "description": "(ii) Black/Blue",
+   "unit": "mts",
+   "rate": 1365.0,
+   "sort": 310
+  },
+  {
+   "kind": "sub",
+   "description": "(ii)Yellow/Green",
+   "unit": "mts",
+   "rate": 1365.0,
+   "sort": 320
+  },
+  {
+   "kind": "item",
+   "description": "4C x 95mm sq PVC Armoured copper cable as Euro make OR as approved equivalent",
+   "unit": "mts",
+   "rate": 195000.0,
+   "sort": 330
+  },
+  {
+   "kind": "item",
+   "description": "4C x 25mm sq PVC Armoured copper cable as Euro make OR as approved equivalent",
+   "unit": "mts",
+   "rate": 58500.0,
+   "sort": 340
+  },
+  {
+   "kind": "item",
+   "description": "4C x 16mm sq PVC Armoured copper cable as Euro make OR as approved equivalent",
+   "unit": "mts",
+   "rate": 38350.0,
+   "sort": 350
+  },
+  {
+   "kind": "item",
+   "description": "4C x 10mm sq PVC Armoured copper cable as Euro make OR as approved equivalent",
+   "unit": "mts",
+   "rate": 35100.0,
+   "sort": 360
+  },
+  {
+   "kind": "item",
+   "description": "1C x 6mm sq PVC copper cable Yellow/Green (earthing) as Euro make Euro make OR as approved equivalent",
+   "unit": "mts",
+   "rate": 10400.0,
+   "sort": 370
+  },
+  {
+   "kind": "section",
+   "description": "FIXED ENCLOSURES FOR CABLE RUNS",
+   "unit": null,
+   "rate": null,
+   "sort": 380
+  },
+  {
+   "kind": "item",
+   "description": "Use 3/4 inch PVC conduit class B tronic for full conduit wiring system c/w all accessories OR as approved equivalent",
+   "unit": "Pc",
+   "rate": 12675.0,
+   "sort": 390
+  },
+  {
+   "kind": "section",
+   "description": "AIR CONDITIONING UNIT (AC)",
+   "unit": null,
+   "rate": null,
+   "sort": 400
+  },
+  {
+   "kind": "group",
+   "description": "Single-split system wall mounted first Fix",
+   "unit": null,
+   "rate": null,
+   "sort": 410
+  },
+  {
+   "kind": "sub",
+   "description": "Install Single-split Air conditioner. Each unit shall be completed with wireless remote, 18000 BTU LG Brand with all necessary pipes",
+   "unit": "set",
+   "rate": 3080000.0,
+   "sort": 420
+  },
+  {
+   "kind": "section",
+   "description": "EARTHING SYSTEM",
+   "unit": null,
+   "rate": null,
+   "sort": 430
+  },
+  {
+   "kind": "item",
+   "description": "Lightning protection\ni. Pure copper bar 3mm(4No.)\nii. Base bade plate copper 6mm (4 pcs)\niii. Lightning arrester (4pcs)\niv. Surge protector Device\nv. Blacket for fixing arrester including Soil treatment 35mm square copper wire",
+   "unit": "Item",
+   "rate": 35000000.0,
+   "sort": 440
+  },
+  {
+   "kind": "item",
+   "description": "Soil treatment and interconnection to general earthing of the house sets to meet requirements of IEE regulations.complete four earth pits with adequate number of earth rods linked together with the earthing cables,filled with wet charcoal/salt or bentonite powder",
+   "unit": "item",
+   "rate": 3900000.0,
+   "sort": 450
+  }
+ ]
+}

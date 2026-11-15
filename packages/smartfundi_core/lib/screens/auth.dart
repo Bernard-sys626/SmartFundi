@@ -14,7 +14,7 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashState extends State<SplashScreen> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..forward();
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..forward();
   @override
   void dispose() {
     _c.dispose();
@@ -108,17 +108,21 @@ class _AuthState extends State<AuthScreen> {
   }
 
   Future<void> _submit() async {
-    final u = _user.text.trim(), p = _pass.text;
-    if (u.length < 3 || u.contains(' ')) return toast(context, tr('err_invalid_username'));
+    // Admin signs in with a username. Fundi / Company use the phone number as the login name.
+    final u = widget.admin ? _user.text.trim() : _phone.text.trim(), p = _pass.text;
+    if (widget.admin) {
+      if (u.length < 3 || u.contains(' ')) return toast(context, tr('err_invalid_username'));
+    } else if (u.replaceAll(RegExp(r'[^0-9]'), '').length < 9) {
+      return toast(context, tr('err_invalid_phone'));
+    }
     if (p.length < 6) return toast(context, tr('err_weak_password'));
     final reg = !widget.admin && register;
     if (reg && p != _pass2.text) return toast(context, tr('err_password_mismatch'));
-    if (reg && _phone.text.replaceAll(RegExp(r'[^0-9]'), '').length < 9) return toast(context, tr('err_invalid_phone'));
     Map? res;
     final ok = await busy(context, () async {
       res = await Api.post(reg ? '/auth/register' : '/auth/login', {
-        'username': u, 'password': p, 'app': appKind, 'language': context.read<AppState>().lang,
-        if (reg) 'phone': _phone.text.trim(),
+        if (reg) 'phone': u else 'username': u,
+        'password': p, 'app': appKind, 'language': context.read<AppState>().lang,
       }) as Map;
     });
     if (ok && res != null && mounted) {
@@ -164,10 +168,16 @@ class _AuthState extends State<AuthScreen> {
         ),
       if (!widget.admin) const SizedBox(height: 16),
       if (reg) Padding(padding: const EdgeInsets.only(bottom: 14), child: Text(tr('set_credentials_hint'), style: TextStyle(color: cs.secondary, height: 1.4))),
-      TextField(
-        controller: _user, keyboardType: TextInputType.visiblePassword, autocorrect: false, enableSuggestions: false, textInputAction: TextInputAction.next,
-        decoration: InputDecoration(hintText: tr('username'), prefixIcon: const Icon(Icons.person_outline)),
-      ),
+      if (widget.admin)
+        TextField(
+          controller: _user, keyboardType: TextInputType.visiblePassword, autocorrect: false, enableSuggestions: false, textInputAction: TextInputAction.next,
+          decoration: InputDecoration(hintText: tr('username'), prefixIcon: const Icon(Icons.person_outline)),
+        )
+      else
+        TextField(
+          controller: _phone, keyboardType: TextInputType.phone, textInputAction: TextInputAction.next,
+          decoration: InputDecoration(hintText: tr('phone_number'), prefixIcon: const Icon(Icons.phone_outlined)),
+        ),
       const SizedBox(height: 12),
       TextField(
         controller: _pass, obscureText: hide, autocorrect: false, enableSuggestions: false,
@@ -179,11 +189,6 @@ class _AuthState extends State<AuthScreen> {
         ),
       ),
       if (reg) ...[
-        const SizedBox(height: 12),
-        TextField(
-          controller: _phone, keyboardType: TextInputType.phone,
-          decoration: InputDecoration(hintText: tr('phone_registered'), prefixIcon: const Icon(Icons.phone_outlined)),
-        ),
         const SizedBox(height: 12),
         TextField(
           controller: _pass2, obscureText: hide, autocorrect: false, enableSuggestions: false, onSubmitted: (_) => _submit(),
@@ -253,12 +258,11 @@ class _ClientStartState extends State<ClientStartScreen> {
     final ok = await busy(context, () async {
       res = await Api.post('/auth/client-start', {
         'name': name, 'phone': phone, 'language': s.lang, 'app': appKind,
-        'region_id': loc!['region_id'], 'district_id': loc!['district_id'], 'ward_id': loc!['ward_id'],
+        'region_id': loc!['region_id'], 'district_id': loc!['district_id'], 'ward_id': loc!['ward_id'], 'ward_text': loc!['ward_text'],
       }) as Map;
     });
     if (!ok || res == null || !mounted) return;
     s.saveLocLabel(loc!['label'] as String);
-    if (loc!['active'] != true) toast(context, tr('err_area_not_available'));
     // Back to the root screen, which becomes the client's home as soon as the user is set.
     Navigator.of(context).popUntil((r) => r.isFirst);
     s.login(res!['token'] as String, Map<String, dynamic>.from(res!['user'] as Map));
@@ -301,7 +305,7 @@ class _ClientStartState extends State<ClientStartScreen> {
               if (v != null && v.isNotEmpty) setState(() => phone = v);
             }, phoneOk),
             step(Icons.location_on_outlined, tr('your_area'), (loc?['label'] ?? '') as String, () async {
-              final v = await pickLocation(context);
+              final v = await pickLocation(context, requireActive: true);
               if (v != null) setState(() => loc = v);
             }, loc != null),
             const Spacer(),
@@ -334,11 +338,11 @@ class _OnboardingState extends State<OnboardingScreen> {
   Future<void> _save() async {
     final s = context.read<AppState>();
     final ok = await busy(context, () async {
-      final r = await Api.put('/auth/me', {'name': name, 'region_id': loc!['region_id'], 'district_id': loc!['district_id'], 'ward_id': loc!['ward_id']}) as Map;
+      final r = await Api.put('/auth/me', {'name': name, 'region_id': loc!['region_id'], 'district_id': loc!['district_id'], 'ward_id': loc!['ward_id'], 'ward_text': loc!['ward_text']}) as Map;
       s.saveLocLabel(loc!['label'] as String);
       s.setUser(Map<String, dynamic>.from(r['user'] as Map));
     });
-    if (ok && mounted && loc!['active'] != true) toast(context, tr('err_area_not_available'));
+    if (ok && mounted) {}
   }
 
   @override
@@ -373,7 +377,7 @@ class _OnboardingState extends State<OnboardingScreen> {
               if (v != null && v.isNotEmpty) setState(() => name = v);
             }, name.isNotEmpty),
             step(Icons.location_on_outlined, tr('your_area'), (loc?['label'] ?? '') as String, () async {
-              final v = await pickLocation(context);
+              final v = await pickLocation(context, requireActive: true);
               if (v != null) setState(() => loc = v);
             }, loc != null),
             const Spacer(),

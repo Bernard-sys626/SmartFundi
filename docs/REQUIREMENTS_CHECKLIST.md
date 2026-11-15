@@ -36,3 +36,28 @@ Done = implemented. Tested = covered by backend/test/smoke.js. App screens are u
 | 7.5 All regions, switch service on/off per region and district, other Admins with regions (editable) | Done, Tested |
 | Regional Admins limited to their own regions (dashboard, payments, jobs, fundis) | Done, Tested |
 | Full official list of districts and wards | Only sample data + import tool (data must come from you) |
+
+
+## Version 2 (mabadiliko ya maelekezo ya New.docx)
+
+| Mahitaji | Hali / Mahali |
+|---|---|
+| Arifa -> Taarifa (maneno yote) | i18n.dart, util.js |
+| Namba ya simu moja kwa wateja wengi | schema.sql (unique ya simu kwa staff pekee), auth.js |
+| Fundi anaingia kwa namba ya simu + password | auth.js, auth.dart |
+| Kuchuja mafundi kwa mkoa/wilaya/kata | directory.js, client.dart (ClientHome) |
+| Kategoria (admin anaongeza), huduma kwa kategoria | categories, admin.dart (_CategoriesPage), fundi.dart |
+| Huduma nyingi + "huduma nyingine", maelezo si lazima | jobs.js, client.dart (ReportFlow) |
+| Kumchagua Fundi; ombi kwa fundi + admin, au kwa wote + admin | jobs.js (announce, MATCH_SQL) |
+| Kazi ikichukuliwa, wengine wanaiona bila kukubali | fundi.js, shared.dart |
+| Nyota za admin + uzoefu wa fundi | admin.dart, directory.js |
+| About na namba za malipo zinahaririwa na admin | admin.dart (_ContentPage) |
+| Picha/video za Home na Msaada | media, help.dart, admin.dart (_MediaPage) |
+| Msaada kwa mteja na fundi (hatua, jinsi ya kulipa, video) | help.dart, i18n hc*/hf* |
+| Ombi lililoghairiwa linapotea; kutuma tena; admin kufuta | jobs.js, admin.js |
+| Kosa la "aina ya fail haikubaliwi" | common.js (content sniffing), widgets.dart (pickDocument any) |
+| Eneo lisilo hai -> ujumbe; kata isiyo kwenye orodha inaandikwa | widgets.dart (pickLocation) |
+| Malipo: kiasi + uthibitisho + risiti (majina na simu) | shared.dart (_PaySheet), payments.js |
+| BOQ: master kutoka Excel, bei binafsi, PDF/Excel na watermark | boq.js, boq_export.js, boq.dart |
+| Mteja kuona BOQ ("Fundi wangu"); admin kuona zote | client.dart, boq.js |
+| Rangi za logo, kasi ya app | theme.dart (bila google_fonts), LazyIndexedStack, thumbnails, compression |

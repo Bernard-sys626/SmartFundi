@@ -9,7 +9,7 @@ Future<void> main() async {
   final state = AppState();
   runApp(ChangeNotifierProvider.value(value: state, child: const SmartFundiApp()));
   try {
-    await Future.wait([state.init(), Future.delayed(const Duration(milliseconds: 2300))]);
+    await Future.wait([state.init(), Future.delayed(const Duration(milliseconds: 900))]);
   } catch (_) {}
   state.markReady();
 }

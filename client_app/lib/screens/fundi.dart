@@ -46,12 +46,32 @@ class _P {
     await put(c, {'areas': areaPayload(p, add: v)}, reload);
   }
 
+  static Set<int> catIds(J p) => {for (final x in (p['category_ids'] as List? ?? [])) x as int};
+
+  /// Categories first (umeme, mechanics, plumbing...). At least one is needed to register.
+  static Future<void> categories(BuildContext c, J p, Future<void> Function() reload) async {
+    final s = c.read<AppState>();
+    final r = await multiPickSheet(c, tr('your_categories'), [for (final x in s.categories) (x['id'] as int, (x['name_$currentLang'] ?? x['name_en']).toString())], catIds(p));
+    if (r == null || !c.mounted) return;
+    await put(c, {'category_ids': r.toList()}, reload);
+  }
+
+  /// Services are shown for the chosen categories only.
   static Future<void> services(BuildContext c, J p, Future<void> Function() reload) async {
     final s = c.read<AppState>();
+    final cats = catIds(p);
+    if (cats.isEmpty) return toast(c, tr('choose_category_first'));
     final cur = {for (final x in (p['service_ids'] as List)) x as int};
-    final r = await multiPickSheet(c, tr('services_you_offer'), [for (final sv in s.services) (sv['id'] as int, svcName(sv))], cur);
+    final list = [for (final sv in s.services) if (cats.contains(sv['category_id'])) sv];
+    final r = await multiPickSheet(c, tr('services_you_offer'), [for (final sv in list) (sv['id'] as int, svcName(sv))], cur);
     if (r == null || !c.mounted) return;
     await put(c, {'service_ids': r.toList()}, reload);
+  }
+
+  static Future<void> experience(BuildContext c, J p, Future<void> Function() reload) async {
+    final v = await inputSheet(c, title: tr('experience'), label: tr('experience_hint'), initial: (asMap(p['user'])['experience'] ?? '').toString(), maxLines: 5);
+    if (v == null || !c.mounted) return;
+    await put(c, {'experience': v}, reload);
   }
 
   static Future<void> name(BuildContext c, J p, Future<void> Function() reload) async {
@@ -77,7 +97,7 @@ class _P {
   }
 
   static Future<void> addDoc(BuildContext c, String kind, Future<void> Function() reload) async {
-    final p = await pickDocument(c);
+    final p = await pickDocument(c); // any file is accepted
     if (p == null || !c.mounted) return;
     final ok = await busy(c, () async {
       final f = await Api.upload(p);
@@ -134,6 +154,7 @@ class _RegBody extends StatelessWidget {
     bool has(String k) => docs.any((d) => d['kind'] == k);
     final areas = asList(p['areas']);
     final serviceNames = [for (final sv in s.services) if ((p['service_ids'] as List).contains(sv['id'])) svcName(sv)];
+    final catNames = [for (final x in s.categories) if (_P.catIds(p).contains(x['id'])) (x['name_$currentLang'] ?? x['name_en']).toString()];
 
     Widget docRow(String kind, {required bool required}) {
       final mine = docs.where((d) => d['kind'] == kind).toList();
@@ -190,6 +211,7 @@ class _RegBody extends StatelessWidget {
         if (v != null && context.mounted) await _P.put(context, {'fundi_type': v}, reload);
       }),
       if (type != null) ...[
+        _step(c: context, icon: Icons.category_outlined, title: '${tr('your_categories')} *', value: catNames.join(', '), done: catNames.isNotEmpty, onTap: () => _P.categories(context, p, reload)),
         _step(c: context, icon: Icons.badge_outlined, title: tr(isCo ? 'company_name' : 'full_name'), value: ((isCo ? user['company_name'] : user['name']) ?? '').toString(), done: ((isCo ? user['company_name'] : user['name']) ?? '').toString().isNotEmpty, onTap: () => _P.name(context, p, reload)),
         _step(c: context, icon: Icons.location_on_outlined, title: tr('work_areas'), value: [for (final a in areas) [a['ward_name'], a['district_name']].whereType<String>().join(', ')].join(' | '), done: areas.isNotEmpty, onTap: () => _P.addArea(context, p, reload)),
         if (areas.isNotEmpty)
@@ -201,6 +223,7 @@ class _RegBody extends StatelessWidget {
             ]),
           ),
         _step(c: context, icon: Icons.electrical_services, title: tr('services_you_offer'), value: serviceNames.join(', '), done: serviceNames.isNotEmpty, onTap: () => _P.services(context, p, reload)),
+        _step(c: context, icon: Icons.workspace_premium_outlined, title: tr('experience'), value: (user['experience'] ?? '').toString(), done: (user['experience'] ?? '').toString().isNotEmpty, onTap: () => _P.experience(context, p, reload)),
         SectionTitle(tr('documents')),
         AppCard(
           onTap: () => _P.photo(context, reload),
@@ -311,15 +334,21 @@ class _FundiShellState extends State<FundiShell> {
   Widget build(BuildContext context) {
     context.watch<AppState>();
     return Scaffold(
-      body: IndexedStack(index: idx, children: const [_AvailablePage(), _MyJobsPage(), _EarningsPage(), _DocumentsPage(), _FundiProfilePage()]),
+      body: LazyIndexedStack(index: idx, builders: [
+        () => const _AvailablePage(),
+        () => const _MyJobsPage(),
+        () => const BoqListPage(embedded: true),
+        () => const _EarningsPage(),
+        () => const _FundiProfilePage(),
+      ]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: idx,
         onDestinationSelected: (i) => setState(() => idx = i),
         destinations: [
           NavigationDestination(icon: const Icon(Icons.flash_on_outlined), selectedIcon: const Icon(Icons.flash_on), label: tr('available_jobs')),
           NavigationDestination(icon: const Icon(Icons.work_outline), selectedIcon: const Icon(Icons.work), label: tr('my_jobs')),
+          NavigationDestination(icon: const Icon(Icons.table_chart_outlined), selectedIcon: const Icon(Icons.table_chart), label: tr('boq')),
           NavigationDestination(icon: const Icon(Icons.account_balance_wallet_outlined), selectedIcon: const Icon(Icons.account_balance_wallet), label: tr('earnings')),
-          NavigationDestination(icon: const Icon(Icons.folder_outlined), selectedIcon: const Icon(Icons.folder), label: tr('documents')),
           NavigationDestination(icon: const Icon(Icons.person_outline), selectedIcon: const Icon(Icons.person), label: tr('profile')),
         ],
       ),
@@ -490,6 +519,8 @@ class _FundiProfilePage extends StatelessWidget {
           final isCo = user['fundi_type'] == 'company';
           final areas = asList(p['areas']);
           final names = [for (final sv in s.services) if ((p['service_ids'] as List).contains(sv['id'])) svcName(sv)];
+          final catNames = [for (final x in s.categories) if (_P.catIds(p).contains(x['id'])) (x['name_$currentLang'] ?? x['name_en']).toString()];
+          final rating = user['admin_rating'];
           Widget tile(IconData i, String t, String sub, VoidCallback f) => AppCard(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: ListTile(contentPadding: EdgeInsets.zero, leading: Icon(i), title: Text(t, style: const TextStyle(fontWeight: FontWeight.w700)), subtitle: sub.isEmpty ? null : Text(sub), trailing: const Icon(Icons.chevron_right), onTap: f),
@@ -503,7 +534,7 @@ class _FundiProfilePage extends StatelessWidget {
                   Text(who(user), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   Text(tr(isCo ? 'type_company' : 'type_technician'), style: TextStyle(color: cs.secondary)),
                   const SizedBox(height: 6),
-                  StatusChip(user['fundi_status'] as String),
+                  Row(children: [StatusChip(user['fundi_status'] as String), if (rating != null) ...[const SizedBox(width: 8), Stars((rating as num).toDouble())]]),
                 ])),
               ]),
             ),
@@ -517,7 +548,11 @@ class _FundiProfilePage extends StatelessWidget {
                 await _P.put(c, {'areas': _P.areaPayload(p, remove: int.parse(act.substring(2)))}, reload);
               }
             }),
+            tile(Icons.category_outlined, tr('your_categories'), catNames.join(', '), () => _P.categories(c, p, reload)),
             tile(Icons.electrical_services, tr('services_you_offer'), names.join(', '), () => _P.services(c, p, reload)),
+            tile(Icons.workspace_premium_outlined, tr('experience'), (user['experience'] ?? '').toString(), () => _P.experience(c, p, reload)),
+            tile(Icons.folder_outlined, tr('documents'), '', () => Navigator.push(c, MaterialPageRoute(builder: (_) => const _DocumentsPage()))),
+            tile(Icons.help_outline, tr('help'), '', () => Navigator.push(c, MaterialPageRoute(builder: (_) => const HelpPage(kind: 'fundi')))),
             tile(Icons.settings_outlined, tr('settings'), '', () => Navigator.push(c, MaterialPageRoute(builder: (_) => const SettingsPage()))),
           ]);
         },

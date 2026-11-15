@@ -2,7 +2,9 @@ const router = require('express').Router();
 const crypto = require('crypto');
 const { q, q1 } = require('../db');
 const { asyncH, fail, auth, role, mainAdmin, normId, normUsername, validUsername, validPassword, hashPassword, getSetting, setSetting, notify } = require('../util');
-const { jobView, confirmPayment } = require('./jobs');
+const multer = require('multer');
+const { jobView, jobViews, confirmPayment } = require('./jobs');
+const { toWebp } = require('./common');
 const { saveProfile, profile } = require('./fundi');
 const { importRows } = require('../seed');
 
@@ -46,6 +48,8 @@ router.get('/fundis', asyncH(async (req, res) => {
   const sc = await scope(req.user);
   const rows = await q(
     `select u.id,u.name,u.phone,u.email,u.fundi_type,u.company_name,u.fundi_status,u.created_at,u.reset_requested_at,
+       u.admin_rating::float admin_rating,
+       (select string_agg(distinct c.name_sw, ', ') from fundi_categories fc join categories c on c.id=fc.category_id where fc.user_id=u.id) categories,
        (select string_agg(distinct d.name, ', ') from fundi_areas a join districts d on d.id=a.district_id where a.user_id=u.id) districts
      from users u where u.role='fundi' and ($1::text is null or u.fundi_status=$1) and ($3::text is null or u.fundi_type=$3)
      and ($2::int[] is null or exists(select 1 from fundi_areas a where a.user_id=u.id and a.region_id = any($2)))
@@ -73,7 +77,7 @@ router.post('/fundis', asyncH(async (req, res) => {
   const b = req.body, id = normId(b.identifier);
   if (!id) return fail(res, 400, 'invalid_identifier');
   const col = id.type === 'email' ? 'email' : 'phone';
-  if (await q1(`select 1 x from users where ${col}=$1`, [id.value])) return fail(res, 409, 'already_exists');
+  if (await q1(`select 1 x from users where ${col}=$1 and role <> 'client'`, [id.value])) return fail(res, 409, 'already_exists');
   const u = await q1(
     `insert into users(role,${col},name,fundi_type,company_name,fundi_status,language) values('fundi',$1,$2,$3,$4,$5,'sw') returning id`,
     [id.value, b.name || null, b.fundi_type === 'company' ? 'company' : 'technician', b.company_name || null, b.approve === false ? 'pending' : 'approved']);
@@ -113,7 +117,12 @@ router.put('/fundis/:id', asyncH(async (req, res) => {
     throw e;
   }
   if (!u) return fail(res, 404, 'not_found');
-  await saveProfile(u.id, { areas: b.areas, service_ids: b.service_ids });
+  await saveProfile(u.id, { areas: b.areas, service_ids: b.service_ids, category_ids: b.category_ids, experience: b.experience });
+  if (Object.prototype.hasOwnProperty.call(b, 'admin_rating')) {
+    // the star rating shown to clients and Fundis is set by the Admin (empty = use the average of client ratings)
+    const r = b.admin_rating === '' || b.admin_rating === null ? null : Math.max(0, Math.min(5, Math.round(Number(b.admin_rating) * 2) / 2));
+    await q('update users set admin_rating=$2 where id=$1', [u.id, Number.isFinite(r) ? r : null]);
+  }
   res.json(await profile(u));
 }));
 router.post('/fundis/:id/documents', asyncH(async (req, res) => {
@@ -195,9 +204,16 @@ router.get('/jobs', asyncH(async (req, res) => {
   const rows = await q(
     `select id from jobs where ($1::text is null or status=$1) and ($2::int[] is null or region_id = any($2)) order by created_at desc limit 200`,
     [req.query.status || null, sc]);
-  const out = [];
-  for (const r of rows) out.push(await jobView(r.id, req.user));
-  res.json(out);
+  res.json(await jobViews(rows.map((r) => r.id), req.user));
+}));
+// A cancelled request can be removed completely by the Admin.
+router.delete('/jobs/:id', asyncH(async (req, res) => {
+  if (!(await jobAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
+  const j = await q1('select status from jobs where id=$1', [req.params.id]).catch(() => null);
+  if (!j) return fail(res, 404, 'not_found');
+  if (j.status !== 'cancelled') return fail(res, 400, 'invalid_status');
+  await q('delete from jobs where id=$1', [req.params.id]);
+  res.json({ ok: true });
 }));
 router.get('/jobs/:id', asyncH(async (req, res) => {
   if (!(await jobAllowed(await scope(req.user), req.params.id))) return fail(res, 403, 'forbidden');
@@ -232,8 +248,8 @@ router.get('/available-fundis', asyncH(async (req, res) => {
   if (!j) return fail(res, 404, 'not_found');
   res.json(await q(
     `select u.id,u.name,u.phone,u.company_name,u.fundi_type from users u where u.role='fundi' and u.fundi_status='approved'
-     and exists(select 1 from fundi_areas a where a.user_id=u.id and a.district_id=$1) and exists(select 1 from fundi_services s where s.user_id=u.id and s.service_id=$2)`,
-    [j.district_id, j.service_id]));
+     and exists(select 1 from fundi_areas a where a.user_id=u.id and a.district_id=$1) and exists(select 1 from fundi_categories fc where fc.user_id=u.id and fc.category_id=$2)`,
+    [j.district_id, j.category_id]));
 }));
 
 // ---------- services ----------
@@ -242,13 +258,60 @@ router.post('/services', mainAdmin, asyncH(async (req, res) => {
   const b = req.body;
   if (!b.name_sw && !b.name_en) return fail(res, 400, 'name_required');
   const key = (b.key || b.name_en || b.name_sw).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') + '_' + Date.now().toString(36);
-  res.json(await q1(`insert into services(trade,key,name_sw,name_en,name_fr,sort) values($1,$2,$3,$4,$5,(select coalesce(max(sort),0)+1 from services)) returning *`,
-    [b.trade || 'electrical', key, b.name_sw || b.name_en, b.name_en || b.name_sw, b.name_fr || b.name_en || b.name_sw]));
+  const cat = await q1('select id,key from categories where id=$1', [Number(b.category_id) || 0]);
+  if (!cat) return fail(res, 400, 'category_required');
+  res.json(await q1(`insert into services(trade,key,name_sw,name_en,name_fr,sort,category_id) values($1,$2,$3,$4,$5,(select coalesce(max(sort),0)+1 from services),$6) returning *`,
+    [cat.key, key, b.name_sw || b.name_en, b.name_en || b.name_sw, b.name_fr || b.name_en || b.name_sw, cat.id]));
 }));
 router.put('/services/:id', mainAdmin, asyncH(async (req, res) => {
   const b = req.body;
-  res.json(await q1(`update services set name_sw=coalesce($2,name_sw), name_en=coalesce($3,name_en), name_fr=coalesce($4,name_fr), active=coalesce($5,active) where id=$1 returning *`,
-    [req.params.id, b.name_sw ?? null, b.name_en ?? null, b.name_fr ?? null, typeof b.active === 'boolean' ? b.active : null]));
+  res.json(await q1(`update services set name_sw=coalesce($2,name_sw), name_en=coalesce($3,name_en), name_fr=coalesce($4,name_fr), active=coalesce($5,active), category_id=coalesce($6,category_id) where id=$1 returning *`,
+    [req.params.id, b.name_sw ?? null, b.name_en ?? null, b.name_fr ?? null, typeof b.active === 'boolean' ? b.active : null, Number(b.category_id) || null]));
+}));
+
+// ---------- categories (trades: electrical, plumbing, mechanics ...) ----------
+router.get('/categories', asyncH(async (req, res) => res.json(await q('select * from categories order by sort,id'))));
+router.post('/categories', mainAdmin, asyncH(async (req, res) => {
+  const b = req.body;
+  if (!b.name_sw && !b.name_en) return fail(res, 400, 'name_required');
+  const key = (b.name_en || b.name_sw).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') + '_' + Date.now().toString(36);
+  res.json(await q1(`insert into categories(key,name_sw,name_en,name_fr,icon,sort) values($1,$2,$3,$4,$5,(select coalesce(max(sort),0)+1 from categories)) returning *`,
+    [key, b.name_sw || b.name_en, b.name_en || b.name_sw, b.name_fr || b.name_en || b.name_sw, b.icon || 'build']));
+}));
+router.put('/categories/:id', mainAdmin, asyncH(async (req, res) => {
+  const b = req.body;
+  res.json(await q1(`update categories set name_sw=coalesce($2,name_sw), name_en=coalesce($3,name_en), name_fr=coalesce($4,name_fr), icon=coalesce($5,icon), active=coalesce($6,active) where id=$1 returning *`,
+    [req.params.id, b.name_sw ?? null, b.name_en ?? null, b.name_fr ?? null, b.icon ?? null, typeof b.active === 'boolean' ? b.active : null]));
+}));
+
+// ---------- pictures and short videos (Home page banners, Help videos) ----------
+const mediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
+const VIDEO = { mp4: 'video/mp4', webm: 'video/webm', '3gp': 'video/3gpp', mov: 'video/quicktime', m4v: 'video/mp4' };
+router.get('/media', asyncH(async (req, res) => res.json(await q('select id,placement,kind,file_id,title,sort,active from media order by placement,sort,id'))));
+router.post('/media', mainAdmin, mediaUpload.single('file'), asyncH(async (req, res) => {
+  const f = req.file;
+  if (!f) return fail(res, 400, 'no_file');
+  const placement = ['home', 'help_client', 'help_fundi'].includes(req.body.placement) ? req.body.placement : 'home';
+  const ext = (f.originalname.split('.').pop() || '').toLowerCase();
+  let kind, data, mime, name = f.originalname;
+  if (VIDEO[ext]) { kind = 'video'; data = f.buffer; mime = VIDEO[ext]; }
+  else {
+    const w = await toWebp(f.buffer);
+    if (!w) return fail(res, 400, 'bad_file_type');
+    kind = 'image'; data = w; mime = 'image/webp'; name = (name.replace(/\.[^.]+$/, '') || 'image') + '.webp';
+  }
+  const file = await q1('insert into files(owner_id,name,mime,data) values($1,$2,$3,$4) returning id', [req.user.id, name, mime, data]);
+  res.json(await q1(`insert into media(placement,kind,file_id,title,sort) values($1,$2,$3,$4,(select coalesce(max(sort),0)+1 from media)) returning *`,
+    [placement, kind, file.id, req.body.title ? String(req.body.title).slice(0, 120) : null]));
+}));
+router.put('/media/:id', mainAdmin, asyncH(async (req, res) => {
+  res.json(await q1(`update media set title=coalesce($2,title), active=coalesce($3,active) where id=$1 returning *`,
+    [req.params.id, req.body.title ?? null, typeof req.body.active === 'boolean' ? req.body.active : null]));
+}));
+router.delete('/media/:id', mainAdmin, asyncH(async (req, res) => {
+  const m = await q1('delete from media where id=$1 returning file_id', [req.params.id]).catch(() => null);
+  if (m && m.file_id) await q('delete from files where id=$1', [m.file_id]);
+  res.json({ ok: true });
 }));
 router.delete('/services/:id', mainAdmin, asyncH(async (req, res) => {
   const used = await q1('select (select count(*) from jobs where service_id=$1)+(select count(*) from fundi_services where service_id=$1) n', [req.params.id]);
@@ -261,6 +324,7 @@ router.delete('/services/:id', mainAdmin, asyncH(async (req, res) => {
 router.get('/settings', asyncH(async (req, res) => res.json({
   commission_percent: Number(await getSetting('commission_percent', 20)),
   payment_methods: await getSetting('payment_methods', {}),
+  payment_accounts: await getSetting('payment_accounts', []),
   about: await getSetting('about', {}),
   landing_url: await getSetting('landing_url', ''),
   is_main_admin: req.user.is_main_admin,
@@ -273,6 +337,13 @@ router.put('/settings', mainAdmin, asyncH(async (req, res) => {
     await setSetting('commission_percent', c);
   }
   if (b.payment_methods) await setSetting('payment_methods', { mobile_money: !!b.payment_methods.mobile_money, bank: !!b.payment_methods.bank, lipa_namba: !!b.payment_methods.lipa_namba });
+  if (Array.isArray(b.payment_accounts)) {
+    // payment numbers shown to clients: label (e.g. M-Pesa, Tigo Pesa, CRDB), number, registered name
+    const acc = b.payment_accounts.slice(0, 12).map((a) => ({
+      label: String(a.label || '').trim().slice(0, 40), number: String(a.number || '').trim().slice(0, 40), name: String(a.name || '').trim().slice(0, 80),
+    })).filter((a) => a.label && a.number);
+    await setSetting('payment_accounts', acc);
+  }
   if (b.about) await setSetting('about', b.about);
   if (typeof b.landing_url === 'string') await setSetting('landing_url', b.landing_url);
   res.json({ ok: true });

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 const brandBlue = Color(0xFF0B2545);
 const brandYellow = Color(0xFFFFC400);
+const brandOrange = Color(0xFFFF8A1F); // action colour (buttons, highlights)
+const brandSky = Color(0xFF2E9BE6); // sea / sky blue (gradients, accents)
+
+/// Blue gradient used for headers and hero cards.
+const brandGradient = LinearGradient(colors: [Color(0xFF0B2545), Color(0xFF1666B0), Color(0xFF2E9BE6)], begin: Alignment.topLeft, end: Alignment.bottomRight);
 
 ThemeData buildTheme(Brightness b) {
   final dark = b == Brightness.dark;
@@ -19,17 +23,16 @@ ThemeData buildTheme(Brightness b) {
           surfaceContainerHighest: Color(0xFFE9EEF5), outline: Color(0xFFD5DCE6),
           secondaryContainer: Color(0xFFDCE6F5), onSecondaryContainer: Color(0xFF0B2545),
           primaryContainer: Color(0xFFDCE6F5), onPrimaryContainer: Color(0xFF0B2545));
-  final base = ThemeData(brightness: b, useMaterial3: true);
   return ThemeData(
     useMaterial3: true,
     brightness: b,
     colorScheme: scheme,
     scaffoldBackgroundColor: dark ? const Color(0xFF0E141C) : const Color(0xFFF4F6F9),
-    textTheme: GoogleFonts.interTextTheme(base.textTheme).apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface),
+    // system font: no download at start-up, so the app opens fast
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent, elevation: 0, scrolledUnderElevation: 0, centerTitle: false,
       foregroundColor: scheme.onSurface,
-      titleTextStyle: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w700, color: scheme.onSurface),
+      titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: scheme.onSurface),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true, fillColor: scheme.surfaceContainerHighest,
@@ -55,6 +58,11 @@ ThemeData buildTheme(Brightness b) {
         side: WidgetStatePropertyAll(BorderSide(color: scheme.outline)),
       ),
     ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(backgroundColor: dark ? brandOrange : brandBlue, foregroundColor: dark ? const Color(0xFF1B1200) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)), padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14)),
+    ),
+    floatingActionButtonTheme: const FloatingActionButtonThemeData(backgroundColor: brandOrange, foregroundColor: Colors.white),
     dividerTheme: DividerThemeData(color: scheme.outline, space: 1),
   );
 }

@@ -12,7 +12,7 @@ const _fbApp = String.fromEnvironment('FIREBASE_APP_ID');
 const _fbSender = String.fromEnvironment('FIREBASE_SENDER_ID');
 const _fbProject = String.fromEnvironment('FIREBASE_PROJECT_ID');
 
-class AppState extends ChangeNotifier {
+class AppState extends ChangeNotifier with WidgetsBindingObserver {
   late SharedPreferences prefs;
   bool ready = false;
   bool langChosen = false;
@@ -21,6 +21,7 @@ class AppState extends ChangeNotifier {
   Map<String, dynamic>? user;
   Map<String, dynamic> config = {};
   List<Map<String, dynamic>> services = [];
+  List<Map<String, dynamic>> categories = [];
   int unread = 0;
   Timer? _poll;
   bool _pushDone = false;
@@ -30,6 +31,7 @@ class AppState extends ChangeNotifier {
   String get locLabel => ready ? (prefs.getString('loc_label') ?? '') : '';
   num get commission => (config['commission_percent'] ?? 20) as num;
   Map<String, dynamic> get about => Map<String, dynamic>.from((config['about'] ?? {}) as Map);
+  List<Map<String, dynamic>> get paymentAccounts => [for (final a in (config['payment_accounts'] ?? []) as List) Map<String, dynamic>.from(a as Map)];
   List<String> get supportPhones => [for (final p in (about['phones'] ?? []) as List) p.toString()];
 
   Future<void> init() async {
@@ -42,7 +44,8 @@ class AppState extends ChangeNotifier {
     Api.onUnauthorized = logout;
     final u = prefs.getString('user');
     if (u != null && Api.token != null) user = Map<String, dynamic>.from(jsonDecode(u) as Map);
-    await Future.wait([loadConfig(), loadServices(), if (Api.token != null) refreshMe()]);
+    WidgetsBinding.instance.addObserver(this);
+    await Future.wait([loadConfig(), loadServices(), loadCategories(), if (Api.token != null) refreshMe()]);
     if (user != null) {
       _startPolling();
       initPush();
@@ -69,6 +72,23 @@ class AppState extends ChangeNotifier {
       services = [for (final s in await Api.get('/services') as List) Map<String, dynamic>.from(s as Map)];
       notifyListeners();
     } catch (_) {}
+  }
+
+  Future<void> loadCategories() async {
+    try {
+      categories = [for (final s in await Api.get('/categories') as List) Map<String, dynamic>.from(s as Map)];
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// Polling stops while the app is in the background (saves battery and data).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState s) {
+    if (s == AppLifecycleState.resumed) {
+      if (user != null) _startPolling();
+    } else if (s == AppLifecycleState.paused) {
+      _poll?.cancel();
+    }
   }
 
   Future<void> refreshMe() async {
@@ -136,7 +156,7 @@ class AppState extends ChangeNotifier {
   void _startPolling() {
     _poll?.cancel();
     refreshUnread();
-    _poll = Timer.periodic(const Duration(seconds: 30), (_) {
+    _poll = Timer.periodic(const Duration(seconds: 45), (_) {
       refreshUnread();
       loadConfig(); // commission and payment methods changed by the Admin show up without restarting
     });
@@ -183,6 +203,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _poll?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 }

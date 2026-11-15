@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { q, q1 } = require('../db');
 const { asyncH, fail, auth, role, haversine, notify, money } = require('../util');
-const { jobView } = require('./jobs');
+const { jobView, jobViews, stripForOthers, fundiMatches } = require('./jobs');
 
 router.use(auth, role('fundi'));
 
@@ -10,12 +10,14 @@ async function profile(u) {
   return {
     user: {
       id: user.id, name: user.name, username: user.username, reset_requested_at: user.reset_requested_at, phone: user.phone, email: user.email, fundi_type: user.fundi_type, company_name: user.company_name,
+      experience: user.experience, admin_rating: user.admin_rating == null ? null : Number(user.admin_rating),
       fundi_status: user.fundi_status, reject_reason: user.reject_reason, photo_file_id: user.photo_file_id, language: user.language,
     },
     areas: await q(
       `select a.id,a.region_id,a.district_id,a.ward_id,r.name region_name,d.name district_name,w.name ward_name from fundi_areas a
        left join regions r on r.id=a.region_id left join districts d on d.id=a.district_id left join wards w on w.id=a.ward_id where a.user_id=$1 order by a.id`, [u.id]),
     service_ids: (await q('select service_id from fundi_services where user_id=$1', [u.id])).map((x) => x.service_id),
+    category_ids: (await q('select category_id from fundi_categories where user_id=$1', [u.id])).map((x) => x.category_id),
     documents: await q('select id,kind,name,file_id,created_at from fundi_documents where user_id=$1 order by id desc', [u.id]),
   };
 }
@@ -23,15 +25,30 @@ router.get('/profile', asyncH(async (req, res) => res.json(await profile(req.use
 
 async function saveProfile(userId, b) {
   await q(`update users set fundi_type=coalesce($2,fundi_type), company_name=coalesce($3,company_name), name=coalesce($4,name),
-           photo_file_id=coalesce($5,photo_file_id) where id=$1`,
-    [userId, ['technician', 'company'].includes(b.fundi_type) ? b.fundi_type : null, b.company_name || null, b.name || null, b.photo_file_id || null]);
+           photo_file_id=coalesce($5,photo_file_id), experience=coalesce($6,experience) where id=$1`,
+    [userId, ['technician', 'company'].includes(b.fundi_type) ? b.fundi_type : null, b.company_name || null, b.name || null, b.photo_file_id || null,
+      typeof b.experience === 'string' ? b.experience.trim().slice(0, 1500) : null]);
   if (Array.isArray(b.areas)) {
     await q('delete from fundi_areas where user_id=$1', [userId]);
     for (const a of b.areas) if (a.district_id) await q('insert into fundi_areas(user_id,region_id,district_id,ward_id) values($1,$2,$3,$4)', [userId, a.region_id || null, a.district_id, a.ward_id || null]);
   }
+  if (Array.isArray(b.category_ids)) {
+    await q('delete from fundi_categories where user_id=$1', [userId]);
+    for (const c of b.category_ids) await q('insert into fundi_categories(user_id,category_id) select $1,id from categories where id=$2 on conflict do nothing', [userId, Number(c) || 0]);
+  }
   if (Array.isArray(b.service_ids)) {
     await q('delete from fundi_services where user_id=$1', [userId]);
-    for (const s of b.service_ids) await q('insert into fundi_services(user_id,service_id) values($1,$2) on conflict do nothing', [userId, s]);
+    for (const s of b.service_ids) await q('insert into fundi_services(user_id,service_id) select $1,id from services where id=$2 on conflict do nothing', [userId, Number(s) || 0]);
+    if (!Array.isArray(b.category_ids)) {
+      // services were chosen without categories (e.g. by an Admin): the Fundi belongs to the categories of those services
+      await q(`insert into fundi_categories(user_id,category_id) select distinct fs.user_id, s.category_id from fundi_services fs join services s on s.id=fs.service_id
+               where fs.user_id=$1 and s.category_id is not null on conflict do nothing`, [userId]);
+    }
+  }
+  if (Array.isArray(b.category_ids) || Array.isArray(b.service_ids)) {
+    // only services that belong to the chosen categories are kept
+    await q(`delete from fundi_services fs using services s where fs.user_id=$1 and s.id=fs.service_id and s.category_id is not null
+             and s.category_id not in (select category_id from fundi_categories where user_id=$1)`, [userId]);
   }
 }
 router.put('/profile', asyncH(async (req, res) => {
@@ -61,6 +78,7 @@ router.post('/submit', asyncH(async (req, res) => {
   if (!p.user.name && p.user.fundi_type === 'technician') missing.push('name');
   if (p.user.fundi_type === 'company' && !p.user.company_name) missing.push('company_name');
   if (!p.areas.length) missing.push('areas');
+  if (!p.category_ids.length) missing.push('categories');
   if (!p.service_ids.length) missing.push('services');
   if (!p.user.photo_file_id) missing.push('photo');
   if (p.user.fundi_type === 'technician') {
@@ -79,21 +97,27 @@ function approved(req, res, next) {
   next();
 }
 
+// New jobs for this Fundi (matching category and area). Jobs that another Fundi has already taken stay visible
+// for three days, read only: they cannot be accepted.
 router.get('/jobs/available', approved, asyncH(async (req, res) => {
   const rows = await q(
-    `select j.id from jobs j where j.status='pending' and j.fundi_id is null and j.preference=$2
-     and exists(select 1 from fundi_areas a where a.user_id=$1 and a.district_id=j.district_id and (a.ward_id is null or a.ward_id=j.ward_id))
-     and exists(select 1 from fundi_services s where s.user_id=$1 and s.service_id=j.service_id)
-     order by j.created_at desc limit 100`, [req.user.id, req.user.fundi_type]);
-  const out = [];
-  for (const r of rows) { const v = await jobView(r.id, req.user); delete v.client; v.address = null; v.lat = null; v.lng = null; out.push(v); }
-  res.json(out);
+    `select j.id from jobs j where (j.preference='any' or j.preference=$2)
+     and ((j.status='pending' and j.fundi_id is null and (j.target_fundi_id is null or j.target_fundi_id=$1))
+       or (j.fundi_id is not null and j.fundi_id<>$1 and j.target_fundi_id is null and j.status<>'cancelled' and j.accepted_at > now() - interval '3 days'))
+     and exists(select 1 from fundi_categories fc where fc.user_id=$1 and fc.category_id=j.category_id)
+     and exists(select 1 from fundi_areas a where a.user_id=$1 and a.district_id=j.district_id and (a.ward_id is null or j.ward_id is null or a.ward_id=j.ward_id))
+     order by (j.fundi_id is not null), j.created_at desc limit 60`, [req.user.id, req.user.fundi_type]);
+  const views = await jobViews(rows.map((r) => r.id), req.user);
+  res.json(views.map((v) => {
+    stripForOthers(v);
+    v.taken = v.status !== 'pending';
+    if (v.taken) { delete v.fundi; delete v.payments; delete v.quotation; }
+    return v;
+  }));
 }));
 router.get('/jobs/mine', approved, asyncH(async (req, res) => {
-  const rows = await q('select id from jobs where fundi_id=$1 order by created_at desc limit 100', [req.user.id]);
-  const out = [];
-  for (const r of rows) out.push(await jobView(r.id, req.user));
-  res.json(out);
+  const rows = await q('select id from jobs where fundi_id=$1 order by created_at desc limit 60', [req.user.id]);
+  res.json(await jobViews(rows.map((r) => r.id), req.user));
 }));
 
 async function myJob(req, res, statuses) {
@@ -107,11 +131,8 @@ const who = (u) => u.company_name || u.name || u.phone;
 router.post('/jobs/:id/accept', approved, asyncH(async (req, res) => {
   const j0 = await q1('select * from jobs where id=$1', [req.params.id]).catch(() => null);
   if (!j0) return fail(res, 404, 'not_found');
-  const ok = await q1(
-    `select 1 x from users u where u.id=$1 and u.fundi_type=$2
-     and exists(select 1 from fundi_areas a where a.user_id=u.id and a.district_id=$3 and (a.ward_id is null or a.ward_id=$4))
-     and exists(select 1 from fundi_services s where s.user_id=u.id and s.service_id=$5)`, [req.user.id, j0.preference, j0.district_id, j0.ward_id, j0.service_id]);
-  if (!ok) return fail(res, 403, 'forbidden');
+  if (j0.target_fundi_id && j0.target_fundi_id !== req.user.id) return fail(res, 403, 'forbidden');
+  if (!(await fundiMatches(req.user.id, j0))) return fail(res, 403, 'forbidden');
   const j = await q1(`update jobs set fundi_id=$1, status='accepted', accepted_at=now() where id=$2 and status='pending' and fundi_id is null returning *`, [req.user.id, j0.id]);
   if (!j) return fail(res, 409, 'already_taken');
   await notify(j.client_id, 'job_accepted', { name: who(req.user), code: j.code }, j.id);

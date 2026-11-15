@@ -22,6 +22,35 @@ const SERVICES = [
   ['other', 'Huduma nyingine za umeme', 'Other related electrical services', 'Autres services électriques'],
 ];
 
+// Categories (trades). The Admin can add more in the Admin app > More > Categories.
+const CATEGORIES = [
+  ['electrical', 'Umeme', 'Electrical', 'Électricité', 'bolt'],
+  ['mechanics', 'Mechanics na Auto Repair', 'Mechanics and Auto Repair', 'Mécanique et réparation auto', 'car_repair'],
+  ['plumbing', 'Mabomba (Plumbing)', 'Plumbing', 'Plomberie', 'plumbing'],
+];
+const MORE_SERVICES = [
+  ['mechanics', 'engine_repair', 'Matengenezo ya injini', 'Engine diagnosis and repair', 'Diagnostic et réparation moteur'],
+  ['mechanics', 'brakes_suspension', 'Breki na suspension', 'Brakes and suspension', 'Freins et suspension'],
+  ['mechanics', 'car_service', 'Service ya gari (mafuta, filters)', 'Vehicle service (oil, filters)', 'Entretien du véhicule'],
+  ['mechanics', 'auto_electrical', 'Umeme wa gari', 'Auto electrical', 'Électricité auto'],
+  ['mechanics', 'tyres_wheels', 'Matairi na wheel alignment', 'Tyres and wheel alignment', 'Pneus et géométrie'],
+  ['plumbing', 'pipe_leaks', 'Kurekebisha uvujaji wa maji', 'Water leak repair', 'Réparation de fuites'],
+  ['plumbing', 'pipe_install', 'Kufunga mabomba ya maji', 'Water pipe installation', 'Installation de tuyauterie'],
+  ['plumbing', 'water_tank', 'Kufunga tanki na pampu ya maji', 'Water tank and pump installation', 'Installation de réservoir et pompe'],
+  ['plumbing', 'drainage', 'Mifereji na vyoo (drainage)', 'Drainage and sanitation', 'Évacuation et sanitaires'],
+  ['plumbing', 'bathroom_fittings', 'Kufunga vifaa vya bafuni na jikoni', 'Bathroom and kitchen fittings', 'Sanitaires et cuisine'],
+];
+
+async function importBoq() {
+  const have = await q1('select count(*)::int c from boq_items');
+  if (have.c) return;
+  const d = require('./boq_seed.json');
+  for (const r of d.rows) {
+    await q('insert into boq_items(kind,description,unit,rate,sort) values($1,$2,$3,$4,$5)', [r.kind, r.description, r.unit, r.rate, r.sort]);
+  }
+  if ((await getSetting('boq_title', null)) === null) await setSetting('boq_title', d.title);
+}
+
 async function importRows(rows) {
   let n = 0;
   for (const r of rows) {
@@ -51,6 +80,19 @@ async function seed() {
   for (const [key, sw, en, fr] of SERVICES) {
     await q('insert into services(key,name_sw,name_en,name_fr,sort) values($1,$2,$3,$4,$5) on conflict(key) do nothing', [key, sw, en, fr, i++]);
   }
+  let ci = 0;
+  for (const [key, sw, en, fr, icon] of CATEGORIES) {
+    await q('insert into categories(key,name_sw,name_en,name_fr,icon,sort) values($1,$2,$3,$4,$5,$6) on conflict(key) do nothing', [key, sw, en, fr, icon, ci++]);
+  }
+  await q(`update services set category_id=(select id from categories where key='electrical') where category_id is null and coalesce(trade,'electrical')='electrical'`);
+  for (const [cat, key, sw, en, fr] of MORE_SERVICES) {
+    await q(`insert into services(trade,key,name_sw,name_en,name_fr,sort,category_id) values($1,$2,$3,$4,$5,(select coalesce(max(sort),0)+1 from services),(select id from categories where key=$1)) on conflict(key) do nothing`, [cat, key, sw, en, fr]);
+  }
+  // existing Fundis keep working: give them the category of the services they already offer
+  await q(`insert into fundi_categories(user_id,category_id) select distinct fs.user_id, s.category_id from fundi_services fs join services s on s.id=fs.service_id where s.category_id is not null on conflict do nothing`);
+  await q(`update jobs set category_id=(select category_id from services where id=jobs.service_id) where category_id is null and service_id is not null`);
+  await q(`insert into job_services(job_id,service_id) select id, service_id from jobs where service_id is not null on conflict do nothing`);
+  await importBoq();
   if ((await getSetting('commission_percent', null)) === null) await setSetting('commission_percent', 20);
   if ((await getSetting('payment_methods', null)) === null) await setSetting('payment_methods', { mobile_money: true, bank: true, lipa_namba: true });
   if ((await getSetting('about', null)) === null) {
@@ -69,7 +111,7 @@ async function seed() {
   for (const p of phones) {
     await q(
       `insert into users(role,is_main_admin,name,phone,language) values('admin',$2,'Admin',$1,'sw')
-       on conflict(phone) do update set role='admin', is_main_admin = users.is_main_admin OR $2`,
+       on conflict(phone) where role <> 'client' do update set role='admin', is_main_admin = users.is_main_admin OR $2`,
       [p.value, first]
     );
     first = false;

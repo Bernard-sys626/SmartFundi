@@ -7,6 +7,8 @@ import '../core/i18n.dart';
 import '../core/state.dart';
 import '../core/theme.dart';
 import '../core/widgets.dart';
+import 'boq.dart';
+import 'help.dart';
 
 typedef J = Map<String, dynamic>;
 J asMap(dynamic v) => Map<String, dynamic>.from(v as Map);
@@ -19,7 +21,8 @@ class JobCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final area = [job['ward_name'], job['district_name']].whereType<String>().join(', ');
+    final area = [job['ward_name'] ?? job['ward_text'], job['district_name']].whereType<String>().join(', ');
+    final tf = job['target_fundi'];
     return AppCard(
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => JobDetailPage(jobId: job['id'] as String))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -30,8 +33,10 @@ class JobCard extends StatelessWidget {
         const SizedBox(height: 6),
         Text('${job['code']}  |  ${fmtDate(job['created_at'])}', style: TextStyle(color: cs.secondary, fontSize: 12.5)),
         const SizedBox(height: 8),
-        Text((job['description'] ?? '').toString(), maxLines: 2, overflow: TextOverflow.ellipsis),
+        if ((job['description'] ?? '').toString().isNotEmpty) Text((job['description'] ?? '').toString(), maxLines: 2, overflow: TextOverflow.ellipsis),
+        if (job['taken'] == true) Padding(padding: const EdgeInsets.only(top: 6), child: Text(tr('job_taken'), style: TextStyle(color: cs.error, fontWeight: FontWeight.w700))),
         if (area.isNotEmpty) ...[const SizedBox(height: 8), Row(children: [Icon(Icons.location_on_outlined, size: 16, color: cs.secondary), const SizedBox(width: 4), Expanded(child: Text(area, style: TextStyle(color: cs.secondary, fontSize: 13)))])],
+        if (tf != null && job['fundi'] == null) Padding(padding: const EdgeInsets.only(top: 6), child: Text('${tr('chosen_fundi')}: ${who(tf as Map)}', style: TextStyle(color: cs.primary, fontWeight: FontWeight.w700))),
         if (job['quotation'] != null) ...[
           const SizedBox(height: 10),
           Row(children: [
@@ -95,7 +100,10 @@ class _JobBody extends StatelessWidget {
     final isMyFundiJob = role == 'fundi' && fundi != null && fundi['id'] == s.user!['id'];
     final open = status != 'completed' && status != 'cancelled';
     final photos = [for (final p in (job['photos'] as List)) p as String];
-    final area = [job['ward_name'], job['district_name'], job['region_name']].whereType<String>().join(', ');
+    final area = [job['ward_name'] ?? job['ward_text'], job['district_name'], job['region_name']].whereType<String>().join(', ');
+    final target = job['target_fundi'] == null ? null : asMap(job['target_fundi']);
+    final taken = job['taken'] == true;
+    final boqs = [for (final b in (job['boqs'] as List? ?? [])) asMap(b)];
 
     final children = <Widget>[
       // header
@@ -117,6 +125,14 @@ class _JobBody extends StatelessWidget {
           child: Text(tr('nauli_due_notice'), style: const TextStyle(fontWeight: FontWeight.w700, height: 1.4)),
         ),
       if (role == 'client' && ['pending', 'accepted', 'on_the_way', 'arrived'].contains(status)) const NauliNotice(compact: true),
+      if (taken && !isMyFundiJob)
+        Container(
+          width: double.infinity, margin: const EdgeInsets.only(bottom: 12), padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: cs.secondary.withOpacity(.12), borderRadius: BorderRadius.circular(20)),
+          child: Text(tr('job_taken_info'), style: const TextStyle(fontWeight: FontWeight.w700, height: 1.4)),
+        ),
+      // the Fundi chosen by the client (request not accepted yet): all details are visible
+      if (target != null && fundi == null) _FundiCard(target, title: tr('chosen_fundi'), showPhone: true),
       // timeline
       AppCard(
         child: Column(children: [
@@ -133,13 +149,22 @@ class _JobBody extends StatelessWidget {
       // details
       AppCard(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(tr('problem'), style: const TextStyle(fontWeight: FontWeight.w800)),
+          Text(tr('services'), style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 6),
-          Text((job['description'] ?? '').toString(), style: const TextStyle(height: 1.4)),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final sv in (job['services'] as List? ?? [])) Chip(label: Text((sv as Map)['name'].toString()), visualDensity: VisualDensity.compact),
+            if ((job['other_service'] ?? '').toString().isNotEmpty) Chip(avatar: const Icon(Icons.edit_note, size: 16), label: Text(job['other_service'].toString()), visualDensity: VisualDensity.compact),
+          ]),
+          if ((job['description'] ?? '').toString().isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(tr('problem'), style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text((job['description'] ?? '').toString(), style: const TextStyle(height: 1.4)),
+          ],
           if ((job['notes'] ?? '').toString().isNotEmpty) ...[const SizedBox(height: 8), Text((job['notes']).toString(), style: TextStyle(color: cs.secondary))],
           const Divider(height: 24),
           RowInfo(tr('area'), area),
-          RowInfo(tr('prefers'), tr(job['preference'] == 'company' ? 'pref_company' : 'pref_technician')),
+          if (job['preference'] == 'company' || job['preference'] == 'technician') RowInfo(tr('prefers'), tr(job['preference'] == 'company' ? 'pref_company' : 'pref_technician')),
           if ((job['address'] ?? '').toString().isNotEmpty) RowInfo(tr('landmark'), job['address'].toString()),
           if (job['lat'] != null) ...[
             const SizedBox(height: 8),
@@ -155,24 +180,8 @@ class _JobBody extends StatelessWidget {
       ),
       // fundi (for client and admin)
       if (fundi != null && role != 'fundi')
-        AppCard(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Avatar(fileId: fundi['photo_file_id'] as String?, name: who(fundi)),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(who(fundi), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                Text(tr(fundi['fundi_type'] == 'company' ? 'pref_company' : 'pref_technician'), style: TextStyle(color: cs.secondary)),
-                if ((fundi['rating'] as Map)['avg'] != null)
-                  Row(children: [const Icon(Icons.star_rounded, color: brandYellow, size: 18), Text(' ${(fundi['rating'] as Map)['avg']} (${(fundi['rating'] as Map)['count']})')]),
-              ])),
-            ]),
-            if (job['can_contact'] == true) ...[
-              const SizedBox(height: 12),
-              ContactRow((fundi['phone'] ?? '').toString(), onChat: role == 'client' ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(jobId: id, title: who(fundi)))) : null),
-            ],
-          ]),
-        ),
+        _FundiCard(fundi, title: tr('fundi'), showPhone: job['can_contact'] == true, contact: job['can_contact'] == true,
+            onChat: role == 'client' ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(jobId: id, title: who(fundi)))) : null),
       // client (for fundi after accepting, and admin)
       if (client != null)
         AppCard(
@@ -184,6 +193,18 @@ class _JobBody extends StatelessWidget {
               const SizedBox(height: 12),
               ContactRow((client['phone'] ?? '').toString(), onChat: isMyFundiJob ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(jobId: id, title: who(client)))) : null),
             ],
+          ]),
+        ),
+      if (boqs.isNotEmpty && role != 'fundi')
+        AppCard(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(tr('boq'), style: const TextStyle(fontWeight: FontWeight.w800)),
+            for (final b in boqs)
+              ListTile(
+                contentPadding: EdgeInsets.zero, leading: const Icon(Icons.table_chart_outlined),
+                title: Text((b['title'] ?? 'BOQ').toString()), subtitle: Text(money(b['total'] as num)), trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => BoqPage(boqId: b['id'] as String))),
+              ),
           ]),
         ),
       // quotation
@@ -216,10 +237,8 @@ class _JobBody extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: Row(children: [
                   Expanded(child: Text('${money(p['amount'] as num)}  |  ${fmtDate(p['created_at'])}', style: const TextStyle(fontSize: 13))),
-                  if (p['status'] == 'success')
-                    TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReceiptPage(paymentId: p['id'] as String))), child: Text(tr('receipt')))
-                  else
-                    StatusChip(p['status'] as String),
+                  StatusChip(p['status'] as String),
+                  TextButton(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ReceiptPage(paymentId: p['id'] as String))), child: Text(tr('receipt'))),
                 ]),
               ),
             if (role == 'client' && status != 'cancelled' && (job['balance'] as num) > 0 && (job['pending'] as num) < (job['balance'] as num)) ...[
@@ -239,7 +258,7 @@ class _JobBody extends StatelessWidget {
     final actions = <Widget>[];
     void add(Widget w) => actions..add(w)..add(const SizedBox(height: 10));
     if (role == 'fundi') {
-      if (status == 'pending' && fundi == null) add(PillButton(tr('accept_job'), icon: Icons.check_circle_outline, onPressed: () => _act(context, () => Api.post('/fundi/jobs/$id/accept'), okMsg: tr('job_accepted_ok'))));
+      if (status == 'pending' && fundi == null && !taken) add(PillButton(tr('accept_job'), icon: Icons.check_circle_outline, onPressed: () => _act(context, () => Api.post('/fundi/jobs/$id/accept'), okMsg: tr('job_accepted_ok'))));
       if (isMyFundiJob) {
         if (status == 'accepted') add(PillButton(tr('on_my_way'), icon: Icons.directions_walk, onPressed: () => _act(context, () => Api.post('/fundi/jobs/$id/on-the-way'))));
         if (status == 'accepted' || status == 'on_the_way') {
@@ -249,9 +268,25 @@ class _JobBody extends StatelessWidget {
               }, okMsg: tr('arrival_confirmed'))));
         }
         if (['accepted', 'on_the_way', 'arrived', 'in_progress'].contains(status)) add(PillButton(tr(quote == null ? 'add_quotation' : 'edit_quotation'), icon: Icons.request_quote_outlined, outlined: true, onPressed: () => _quote(context)));
+        add(PillButton(tr('create_boq'), icon: Icons.table_chart_outlined, outlined: true, onPressed: () async {
+          J? b;
+          final ok = await busy(context, () async => b = asMap(await Api.post('/boq', {'job_id': id})));
+          if (ok && b != null && context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => BoqPage(boqId: b!['id'] as String, editable: true)));
+        }));
         if (status == 'arrived') add(PillButton(tr('start_work'), icon: Icons.play_arrow_rounded, onPressed: () => _act(context, () => Api.post('/fundi/jobs/$id/start'))));
         if (status == 'in_progress') add(PillButton(tr('complete_job'), icon: Icons.task_alt, onPressed: () => _act(context, () => Api.post('/fundi/jobs/$id/complete'), okMsg: tr('job_completed_ok'))));
       }
+    }
+    if (role == 'client' && status == 'pending' && fundi == null) {
+      add(PillButton(tr('resend_request'), icon: Icons.refresh, outlined: true, onPressed: () async {
+        var openAll = false;
+        if (target != null) {
+          final pick = await pickSheet<int>(context, tr('resend_request'), [(1, tr('resend_same')), (2, tr('resend_all'))]);
+          if (pick == null || !context.mounted) return;
+          openAll = pick == 2;
+        }
+        _act(context, () => Api.post('/jobs/$id/resend', {'open_to_all': openAll}), okMsg: tr('resent_ok'));
+      }));
     }
     if (role == 'client' && open) {
       add(PillButton(tr('cancel_request'), outlined: true, danger: true, onPressed: () async {
@@ -260,6 +295,14 @@ class _JobBody extends StatelessWidget {
         final reason = await inputSheet(context, title: tr('reason_optional'), label: tr('reason'));
         if (reason == null || !context.mounted) return;
         _act(context, () => Api.post('/jobs/$id/cancel', {'reason': reason}));
+      }));
+    }
+    if (role == 'admin' && status == 'cancelled') {
+      add(PillButton(tr('delete'), icon: Icons.delete_outline, outlined: true, danger: true, onPressed: () async {
+        final ok = await confirmDialog(context, tr('delete'), tr('delete_job_confirm'), danger: true);
+        if (!ok || !context.mounted) return;
+        final done = await busy(context, () async => await Api.delete('/admin/jobs/$id'));
+        if (done && context.mounted) Navigator.pop(context, true);
       }));
     }
     if (role == 'admin' && open) {
@@ -286,7 +329,7 @@ class _JobBody extends StatelessWidget {
     if (methods.isEmpty) return toast(c, tr('err_method_disabled'));
     final res = await showModalBottomSheet<J>(
       context: c, isScrollControlled: true, showDragHandle: true,
-      builder: (_) => _PaySheet(balance: (job['balance'] as num) - (job['pending'] as num), methods: methods),
+      builder: (_) => _PaySheet(balance: (job['balance'] as num) - (job['pending'] as num), methods: methods, accounts: s.paymentAccounts),
     );
     if (res == null || !c.mounted) return;
     J? out;
@@ -346,7 +389,8 @@ class _TimelineRow extends StatelessWidget {
 class _PaySheet extends StatefulWidget {
   final num balance;
   final List<String> methods;
-  const _PaySheet({required this.balance, required this.methods});
+  final List<Map<String, dynamic>> accounts;
+  const _PaySheet({required this.balance, required this.methods, required this.accounts});
   @override
   State<_PaySheet> createState() => _PaySheetState();
 }
@@ -354,6 +398,7 @@ class _PaySheet extends StatefulWidget {
 class _PaySheetState extends State<_PaySheet> {
   late final _amount = TextEditingController(text: widget.balance.round().toString());
   final _phone = TextEditingController();
+  final _txn = TextEditingController();
   late String method = widget.methods.first;
   @override
   Widget build(BuildContext context) {
@@ -364,8 +409,31 @@ class _PaySheetState extends State<_PaySheet> {
           Text(tr('pay_now'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
           const SizedBox(height: 4),
           Text('${tr('balance')}: ${money(widget.balance)}', style: TextStyle(color: Theme.of(context).colorScheme.secondary)),
-          const SizedBox(height: 16),
-          TextField(controller: _amount, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('amount'), prefixText: 'TSh ')),
+          const SizedBox(height: 14),
+          if (widget.accounts.isNotEmpty) ...[
+            Text(tr('pay_to'), style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(tr('pay_steps'), style: TextStyle(color: Theme.of(context).colorScheme.secondary, height: 1.4, fontSize: 13)),
+            const SizedBox(height: 8),
+            for (final a in widget.accounts)
+              AppCard(
+                child: Row(children: [
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${a['label'] ?? ''}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                    Text('${a['number'] ?? ''}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                    Text('${a['name'] ?? ''}'),
+                  ])),
+                  IconButton(icon: const Icon(Icons.copy), onPressed: () {
+                    Clipboard.setData(ClipboardData(text: '${a['number'] ?? ''}'));
+                    toast(context, tr('copied'));
+                  }),
+                ]),
+              ),
+            const SizedBox(height: 8),
+          ],
+          TextField(controller: _amount, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('amount_sent'), prefixText: 'TSh ')),
+          const SizedBox(height: 12),
+          TextField(controller: _txn, decoration: InputDecoration(labelText: tr('txn_ref_optional'))),
           const SizedBox(height: 14),
           Wrap(spacing: 8, runSpacing: 8, children: [
             for (final m in widget.methods)
@@ -376,10 +444,10 @@ class _PaySheetState extends State<_PaySheet> {
             TextField(controller: _phone, keyboardType: TextInputType.phone, decoration: InputDecoration(labelText: tr('mobile_number'))),
           ],
           const SizedBox(height: 18),
-          PillButton(tr('pay_now'), onPressed: () {
+          PillButton(tr('confirm_payment'), onPressed: () {
             final a = num.tryParse(_amount.text.trim());
             if (a == null || a <= 0) return toast(context, tr('err_invalid_amount'));
-            Navigator.pop(context, {'amount': a, 'method': method, 'phone': _phone.text.trim()});
+            Navigator.pop(context, {'amount': a, 'method': method, 'phone': _phone.text.trim(), 'txn_ref': _txn.text.trim()});
           }),
         ]),
       ),
@@ -479,12 +547,15 @@ class ReceiptPage extends StatelessWidget {
             (tr('receipt_no'), '${r['receipt_no']}'),
             (tr('date_time'), fmtDate(r['paid_at'])),
             (tr('client'), '${r['client_name']}'),
+            (tr('client_phone'), '${r['client_phone'] ?? ''}'),
             (tr('fundi'), '${r['fundi_name'] ?? ''}'),
             (tr('fundi_phone'), '${r['fundi_phone'] ?? ''}'),
             (tr('service'), '${r['service_name']}'),
             (tr('job_code'), '${r['job_code']}'),
             (tr('location'), '${r['location']}'),
             (tr('payment_method'), tr('pm_${r['method']}')),
+            if ((r['txn_ref'] ?? '').toString().isNotEmpty) (tr('txn_ref'), '${r['txn_ref']}'),
+            (tr('status'), tr('ps_${r['status']}')),
             (tr('amount_paid'), money(r['amount_paid'] as num)),
             if (r['quoted'] != null) (tr('total'), money(r['quoted'] as num)),
             (tr('total_paid'), money(r['total_paid'] as num)),
@@ -827,14 +898,14 @@ class SettingsPage extends StatelessWidget {
         }, sub: s.name),
         if (s.role == 'client')
           tile(Icons.location_on_outlined, tr('your_area'), () async {
-            final v = await pickLocation(context);
+            final v = await pickLocation(context, requireActive: true);
             if (v == null || !context.mounted) return;
             final ok = await busy(context, () async {
-              final r = await Api.put('/auth/me', {'region_id': v['region_id'], 'district_id': v['district_id'], 'ward_id': v['ward_id']}) as Map;
+              final r = await Api.put('/auth/me', {'region_id': v['region_id'], 'district_id': v['district_id'], 'ward_id': v['ward_id'], 'ward_text': v['ward_text']}) as Map;
               s.saveLocLabel(v['label'] as String);
               s.setUser(asMap(r['user']));
             });
-            if (ok) toast(context, v['active'] == true ? tr('saved') : tr('err_area_not_available'));
+            if (ok) toast(context, tr('saved'));
           }, sub: s.locLabel.isEmpty ? tr('tap_to_set') : s.locLabel),
         if (s.role == 'admin')
           tile(Icons.lock_outline, tr('change_credentials'), () => _changeCredentials(context, s), sub: (u['username'] ?? '').toString()),
@@ -846,6 +917,7 @@ class SettingsPage extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           child: SwitchListTile(contentPadding: EdgeInsets.zero, secondary: const Icon(Icons.dark_mode_outlined), title: Text(tr('night_mode'), style: const TextStyle(fontWeight: FontWeight.w700)), value: s.themeMode == ThemeMode.dark, onChanged: s.setDark),
         ),
+        if (s.role == 'client' || s.role == 'fundi') tile(Icons.help_outline, tr('help'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => HelpPage(kind: s.role == 'fundi' ? 'fundi' : 'client')))),
         tile(Icons.info_outline, tr('about_us'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutPage()))),
         tile(Icons.privacy_tip_outlined, tr('privacy_terms'), () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PrivacyPage()))),
         tile(Icons.support_agent, tr('support'), () => _support(context, s)),
@@ -872,7 +944,7 @@ class AboutPage extends StatelessWidget {
       body: ListView(padding: const EdgeInsets.all(16), children: [
         Center(child: Column(children: [const LogoMark(88), const SizedBox(height: 10), const Wordmark(size: 30), const SizedBox(height: 4), Text('v1.0.0', style: TextStyle(color: cs.secondary))])),
         const SizedBox(height: 20),
-        AppCard(child: Text(tr('about_desc'), style: const TextStyle(height: 1.5))),
+        AppCard(child: Text(((a['text'] is Map ? (a['text'] as Map)[s.lang] : null) ?? '').toString().trim().isNotEmpty ? (a['text'] as Map)[s.lang].toString() : tr('about_desc'), style: const TextStyle(height: 1.5))),
         AppCard(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(tr('in_collab'), style: TextStyle(color: cs.secondary)),
@@ -903,6 +975,51 @@ class PrivacyPage extends StatelessWidget {
           if (url.isEmpty) return toast(context, tr('landing_soon'));
           openUri(context, Uri.parse(url));
         }),
+      ]),
+    );
+  }
+}
+
+
+// ===================================================================== fundi details card
+/// Name, photo, kind, stars, experience, services and (when allowed) the phone number of a Fundi / Company.
+class _FundiCard extends StatelessWidget {
+  final J f;
+  final String title;
+  final bool showPhone, contact;
+  final VoidCallback? onChat;
+  const _FundiCard(this.f, {required this.title, this.showPhone = false, this.contact = false, this.onChat});
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final rating = f['rating'] is Map ? (f['rating'] as Map)['avg'] : null;
+    return AppCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: TextStyle(color: cs.secondary)),
+        const SizedBox(height: 8),
+        Row(children: [
+          Avatar(fileId: f['photo_file_id'] as String?, name: who(f)),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(who(f), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+            Text(tr(f['fundi_type'] == 'company' ? 'pref_company' : 'pref_technician'), style: TextStyle(color: cs.secondary)),
+            if (rating != null) Stars((rating as num).toDouble()),
+          ])),
+        ]),
+        if (showPhone && (f['phone'] ?? '').toString().isNotEmpty) ...[
+          const SizedBox(height: 8),
+          RowInfo(tr('phone'), f['phone'].toString()),
+        ],
+        if ((f['name'] ?? '').toString().isNotEmpty && (f['company_name'] ?? '').toString().isNotEmpty) RowInfo(tr('name'), f['name'].toString()),
+        if ((f['experience'] ?? '').toString().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(tr('experience'), style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(f['experience'].toString(), style: const TextStyle(height: 1.4)),
+        ],
+        if (contact && (f['phone'] ?? '').toString().isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ContactRow(f['phone'].toString(), onChat: onChat),
+        ],
       ]),
     );
   }

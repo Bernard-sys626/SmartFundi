@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { q1 } = require('../db');
+const { q, q1 } = require('../db');
 const { asyncH, fail, auth } = require('../util');
 const { confirmPayment } = require('./jobs');
 
@@ -9,11 +9,14 @@ router.get('/:id/receipt', auth, asyncH(async (req, res) => {
   const p = await q1('select * from payments where id=$1', [req.params.id]).catch(() => null);
   if (!p) return fail(res, 404, 'not_found');
   const j = await q1(
-    `select j.*, s.name_sw,s.name_en,s.name_fr, r.name region_name, d.name district_name, w.name ward_name
-     from jobs j left join services s on s.id=j.service_id left join regions r on r.id=j.region_id
+    `select j.*, r.name region_name, d.name district_name, w.name ward_name
+     from jobs j left join regions r on r.id=j.region_id
      left join districts d on d.id=j.district_id left join wards w on w.id=j.ward_id where j.id=$1`, [p.job_id]);
   const u = req.user;
   if (!(u.role === 'admin' || j.client_id === u.id || j.fundi_id === u.id)) return fail(res, 404, 'not_found');
+  const lang = SVC[req.user.language] || 'name_sw';
+  const sv = await q(`select s.${lang} n from job_services js join services s on s.id=js.service_id where js.job_id=$1 order by s.sort`, [j.id]);
+  const serviceName = [...sv.map((x) => x.n), ...(j.other_service ? [j.other_service] : [])].join(', ');
   const client = await q1('select name,phone from users where id=$1', [j.client_id]);
   const fundi = j.fundi_id ? await q1('select name,phone,company_name from users where id=$1', [j.fundi_id]) : null;
   const qt = await q1('select amount from quotations where job_id=$1', [j.id]);
@@ -24,8 +27,8 @@ router.get('/:id/receipt', auth, asyncH(async (req, res) => {
     amount_paid: Number(p.amount), total_paid: Number(sums.s), quoted: qt ? Number(qt.amount) : null,
     balance: qt ? Math.max(Number(qt.amount) - Number(sums.s), 0) : null,
     fundi_name: fundi ? fundi.company_name || fundi.name : null, fundi_phone: fundi ? fundi.phone : null,
-    service_name: j[SVC[u.language] || 'name_sw'], job_code: j.code,
-    location: [j.ward_name, j.district_name, j.region_name].filter(Boolean).join(', '),
+    service_name: serviceName, txn_ref: p.txn_ref, job_code: j.code,
+    location: [j.ward_name || j.ward_text, j.district_name, j.region_name].filter(Boolean).join(', '),
     paid_at: p.confirmed_at || p.created_at,
   });
 }));

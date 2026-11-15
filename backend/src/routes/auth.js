@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
 const { q, q1 } = require('../db');
-const { asyncH, fail, sign, auth, notify, normId, normUsername, validUsername, validPassword, hashPassword, checkPassword } = require('../util');
+const { asyncH, fail, sign, auth, notify, normId, normUsername, validUsername, validPassword, hashPassword, checkPassword, findLoginUser } = require('../util');
 
 const MAXR = Number(process.env.RATE_LIMIT_MAX || 10);
 const limiter = rateLimit({ windowMs: 60 * 1000, max: MAXR, standardHeaders: true, legacyHeaders: false });
@@ -12,8 +12,9 @@ const LANGS = ['sw', 'en', 'fr'];
 //  * Fundi / Company: sets a username and password the first time, then signs in with them on any phone.
 //  * Admin   : signs in with username and password in the Admin app (default created at startup, see seed.js).
 
-// Client: one tap, fill in the details and go. The phone number identifies the client, so the same
-// number on another phone opens the same account.
+// Client: one tap, fill in the details and go. A phone number may be shared (someone can use another
+// person's phone to report a problem), so a client is recognised by phone number AND name:
+// the same name on the same number opens the same account, a different name creates a new client.
 router.post('/client-start', limiter, asyncH(async (req, res) => {
   if (req.body.app === 'admin') return fail(res, 403, 'not_admin');
   const b = req.body;
@@ -22,15 +23,17 @@ router.post('/client-start', limiter, asyncH(async (req, res) => {
   const name = String(b.name || '').trim();
   if (!name) return fail(res, 400, 'name_required');
   const lang = LANGS.includes(b.language) ? b.language : 'sw';
-  let u = await q1('select * from users where phone=$1', [id.value]);
+  if (await q1(`select 1 x from users where phone=$1 and role <> 'client'`, [id.value])) {
+    const staff = await q1(`select role from users where phone=$1 and role <> 'client'`, [id.value]);
+    return fail(res, staff.role === 'admin' ? 403 : 409, staff.role === 'admin' ? 'use_admin_app' : 'phone_in_use');
+  }
+  let u = await q1(`select * from users where phone=$1 and role='client' and lower(name)=lower($2) order by created_at limit 1`, [id.value, name]);
   let isNew = false;
   if (u) {
-    if (u.role === 'admin') return fail(res, 403, 'use_admin_app');
-    if (u.role !== 'client') return fail(res, 409, 'phone_in_use');
     if (u.blocked) return fail(res, 403, 'blocked');
     u = await q1(
-      `update users set name=$2, language=$3, region_id=coalesce($4,region_id), district_id=coalesce($5,district_id), ward_id=coalesce($6,ward_id) where id=$1 returning *`,
-      [u.id, name, lang, b.region_id ?? null, b.district_id ?? null, b.ward_id ?? null]
+      `update users set language=$2, region_id=coalesce($3,region_id), district_id=coalesce($4,district_id), ward_id=coalesce($5,ward_id) where id=$1 returning *`,
+      [u.id, lang, b.region_id ?? null, b.district_id ?? null, b.ward_id ?? null]
     );
   } else {
     isNew = true;
@@ -42,18 +45,16 @@ router.post('/client-start', limiter, asyncH(async (req, res) => {
   res.json({ token: sign(u.id), is_new: isNew, user: await userOut(u) });
 }));
 
-// Fundi / Company: first time only. Chooses a username and password.
+// Fundi / Company: first time only. The phone number IS the login, together with a password.
 router.post('/register', limiter, asyncH(async (req, res) => {
   if (req.body.app === 'admin') return fail(res, 403, 'not_admin');
-  const username = normUsername(req.body.username);
-  if (!validUsername(username)) return fail(res, 400, 'invalid_username');
   if (!validPassword(req.body.password)) return fail(res, 400, 'weak_password');
   const lang = LANGS.includes(req.body.language) ? req.body.language : 'sw';
-  // The phone number is needed to recognise the Fundi when the password is forgotten.
-  const ph = normId(req.body.phone);
+  const ph = normId(req.body.phone || req.body.username);
   if (!ph || ph.type !== 'phone') return fail(res, 400, 'invalid_phone');
-  if (await q1('select 1 x from users where lower(username)=$1', [username])) return fail(res, 409, 'username_taken');
-  if (await q1('select 1 x from users where phone=$1', [ph.value])) return fail(res, 409, 'phone_in_use');
+  if (await q1(`select 1 x from users where phone=$1 and role <> 'client'`, [ph.value])) return fail(res, 409, 'phone_in_use');
+  const username = normUsername(ph.value);
+  if (await q1('select 1 x from users where lower(username)=$1', [username])) return fail(res, 409, 'phone_in_use');
   let u;
   try {
     u = await q1(
@@ -61,7 +62,7 @@ router.post('/register', limiter, asyncH(async (req, res) => {
       [username, hashPassword(req.body.password), ph.value, lang]
     );
   } catch (e) {
-    if (e.code === '23505') return fail(res, 409, e.constraint && e.constraint.includes('phone') ? 'phone_in_use' : 'username_taken');
+    if (e.code === '23505') return fail(res, 409, 'phone_in_use');
     throw e;
   }
   res.json({ token: sign(u.id), is_new: true, user: await userOut(u) });
@@ -69,8 +70,7 @@ router.post('/register', limiter, asyncH(async (req, res) => {
 
 // Fundi / Company / Admin: sign in with the saved username and password (any phone).
 router.post('/login', limiter, asyncH(async (req, res) => {
-  const username = normUsername(req.body.username);
-  const u = username ? await q1('select * from users where lower(username)=$1', [username]) : null;
+  const u = await findLoginUser(req.body.username || req.body.phone);
   if (!u || !checkPassword(req.body.password, u.password_hash)) return fail(res, 401, 'invalid_credentials');
   if (req.body.app === 'admin' && u.role !== 'admin') return fail(res, 403, 'not_admin');
   if (req.body.app !== 'admin' && u.role === 'admin') return fail(res, 403, 'use_admin_app');

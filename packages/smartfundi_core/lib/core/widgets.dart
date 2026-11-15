@@ -309,12 +309,14 @@ class FileImg extends StatelessWidget {
   final String id;
   final double? w, h;
   final double radius;
-  const FileImg(this.id, {super.key, this.w, this.h, this.radius = 14});
+  /// Width asked from the server (small pictures load fast). Use 0 for the full size picture.
+  final int thumb;
+  const FileImg(this.id, {super.key, this.w, this.h, this.radius = 14, this.thumb = 480});
   @override
   Widget build(BuildContext context) => ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         child: Image.network(
-          Api.fileUrl(id), headers: Api.authHeaders, width: w, height: h, fit: BoxFit.cover,
+          Api.fileUrl(id, w: thumb > 0 ? thumb : null), headers: Api.authHeaders, width: w, height: h, fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => Container(
               width: w, height: h, color: Theme.of(context).colorScheme.surfaceContainerHighest,
               child: const Icon(Icons.image_not_supported_outlined)),
@@ -547,14 +549,35 @@ Future<List<String>> pickImages(BuildContext c, {bool multi = true}) async {
 
 Future<String?> pickDocument(BuildContext c, {bool images = true}) async {
   try {
-    final r = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', if (images) ...['jpg', 'jpeg', 'png', 'webp']],
-    );
+    // Any file may be chosen (the server checks the content), so no "file type not allowed" message.
+    final r = await FilePicker.platform.pickFiles(type: FileType.any);
     return r?.files.single.path;
   } catch (_) {
     toast(c, tr('err_generic'));
     return null;
+  }
+}
+
+/// Camera, gallery or any file on the phone (used for documents and attachments).
+Future<List<String>> pickAnyAttachment(BuildContext c, {bool multi = true}) async {
+  final src = await pickSheet<int>(c, tr('add_photo'), [(1, tr('camera')), (2, tr('gallery')), (3, tr('choose_file'))]);
+  if (src == null) return [];
+  if (src == 3) {
+    final p = await pickDocument(c);
+    return p == null ? [] : [p];
+  }
+  try {
+    final p = ImagePicker();
+    if (src == 1) {
+      final f = await p.pickImage(source: ImageSource.camera, imageQuality: 85);
+      return f == null ? [] : [f.path];
+    }
+    if (multi) return [for (final f in await p.pickMultiImage(imageQuality: 85)) f.path];
+    final f = await p.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    return f == null ? [] : [f.path];
+  } catch (_) {
+    toast(c, tr('err_generic'));
+    return [];
   }
 }
 
@@ -600,38 +623,128 @@ class ContactRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------- location popups
-Future<Map<String, dynamic>?> pickLocation(BuildContext c, {bool wholeDistrict = false}) async {
+/// Region -> district -> ward. When [requireActive] is true and the region or district is not switched on yet,
+/// the person is told the area is not reached yet and is asked to choose a nearby one.
+/// When the ward is not in the list the person can type it (ward or a known landmark): `ward_text`.
+Future<Map<String, dynamic>?> pickLocation(BuildContext c, {bool wholeDistrict = false, bool requireActive = false}) async {
   final regions = await busyVal<List>(c, () async => await Api.get('/locations/regions') as List);
   if (regions == null || !c.mounted) return null;
-  final rid = await pickSheet<int>(c, tr('region'), [for (final r in regions) (r['id'] as int, r['name'] as String)], search: true);
-  if (rid == null || !c.mounted) return null;
-  final region = regions.firstWhere((r) => r['id'] == rid);
-  final ds = await busyVal<List>(c, () async => await Api.get('/locations/districts?region_id=$rid') as List);
-  if (ds == null || !c.mounted) return null;
-  if (ds.isEmpty) {
-    toast(c, tr('no_districts'));
-    return null;
+  Map? region, district;
+  List ds = [];
+  while (true) {
+    final rid = await pickSheet<int>(c, tr('region'), [for (final r in regions) (r['id'] as int, r['name'] as String)], search: true);
+    if (rid == null || !c.mounted) return null;
+    region = regions.firstWhere((r) => r['id'] == rid);
+    if (requireActive && region['active'] != true) {
+      await notReached(c);
+      if (!c.mounted) return null;
+      continue;
+    }
+    final got = await busyVal<List>(c, () async => await Api.get('/locations/districts?region_id=$rid') as List);
+    if (got == null || !c.mounted) return null;
+    ds = got;
+    if (ds.isEmpty) {
+      toast(c, tr('no_districts'));
+      continue;
+    }
+    final did = await pickSheet<int>(c, tr('district'), [for (final d in ds) (d['id'] as int, d['name'] as String)], search: true);
+    if (did == null || !c.mounted) return null;
+    district = ds.firstWhere((d) => d['id'] == did);
+    if (requireActive && district!['active'] != true) {
+      await notReached(c);
+      if (!c.mounted) return null;
+      continue;
+    }
+    break;
   }
-  final did = await pickSheet<int>(c, tr('district'), [for (final d in ds) (d['id'] as int, d['name'] as String)], search: true);
-  if (did == null || !c.mounted) return null;
-  final district = ds.firstWhere((d) => d['id'] == did);
+  final did = district!['id'] as int;
   final ws = await busyVal<List>(c, () async => await Api.get('/locations/wards?district_id=$did') as List);
   if (ws == null || !c.mounted) return null;
   int? wid;
-  String? wname;
+  String? wname, wtext;
   if (ws.isNotEmpty) {
-    final items = <(int, String)>[if (wholeDistrict) (0, tr('whole_district')), for (final w in ws) (w['id'] as int, w['name'] as String)];
+    final items = <(int, String)>[
+      if (wholeDistrict) (0, tr('whole_district')),
+      for (final w in ws) (w['id'] as int, w['name'] as String),
+      if (requireActive) (-1, tr('ward_not_listed')),
+    ];
     final pick = await pickSheet<int>(c, tr('ward'), items, search: true);
     if (pick == null) return null;
-    if (pick != 0) {
+    if (pick == -1) {
+      if (!c.mounted) return null;
+      final t = await inputSheet(c, title: tr('type_ward'), label: tr('ward_hint'));
+      if (t != null && t.isNotEmpty) wtext = t;
+    } else if (pick != 0) {
       wid = pick;
       wname = ws.firstWhere((w) => w['id'] == pick)['name'] as String;
     }
+  } else if (requireActive) {
+    if (!c.mounted) return null;
+    final t = await inputSheet(c, title: tr('type_ward'), label: tr('ward_hint'));
+    if (t != null && t.isNotEmpty) wtext = t;
   }
   return {
-    'region_id': rid, 'district_id': did, 'ward_id': wid,
-    'region_name': region['name'], 'district_name': district['name'], 'ward_name': wname,
+    'region_id': region['id'], 'district_id': did, 'ward_id': wid, 'ward_text': wtext,
+    'region_name': region['name'], 'district_name': district['name'], 'ward_name': wname ?? wtext,
     'active': region['active'] == true && district['active'] == true,
-    'label': [wname, district['name'], region['name']].whereType<String>().join(', '),
+    'label': [wname ?? wtext, district['name'], region['name']].whereType<String>().join(', '),
   };
 }
+
+Future<void> notReached(BuildContext c) => showDialog<void>(
+      context: c,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        icon: const Icon(Icons.location_off_outlined, size: 36),
+        title: Text(tr('area_not_reached')),
+        content: Text(tr('area_not_reached_sub')),
+        actions: [FilledButton(onPressed: () => Navigator.pop(c), child: Text(tr('ok')))],
+      ),
+    );
+
+// ---------------------------------------------------------------- layout helpers
+/// Builds a tab only when it is opened the first time (faster start), and keeps it alive afterwards.
+class LazyIndexedStack extends StatefulWidget {
+  final int index;
+  final List<Widget Function()> builders;
+  const LazyIndexedStack({super.key, required this.index, required this.builders});
+  @override
+  State<LazyIndexedStack> createState() => _LazyIndexedStackState();
+}
+
+class _LazyIndexedStackState extends State<LazyIndexedStack> {
+  late final List<Widget?> _built = List.filled(widget.builders.length, null);
+  @override
+  Widget build(BuildContext context) {
+    _built[widget.index] ??= widget.builders[widget.index]();
+    return IndexedStack(index: widget.index, children: [for (final b in _built) b ?? const SizedBox.shrink()]);
+  }
+}
+
+/// Blue gradient card used at the top of screens.
+class HeroCard extends StatelessWidget {
+  final Widget child;
+  const HeroCard({super.key, required this.child});
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(gradient: brandGradient, borderRadius: BorderRadius.circular(24), boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4))]),
+        child: DefaultTextStyle.merge(style: const TextStyle(color: Colors.white), child: IconTheme(data: const IconThemeData(color: Colors.white), child: child)),
+      );
+}
+
+/// Read-only stars (0-5, halves allowed).
+class Stars extends StatelessWidget {
+  final double value;
+  final double size;
+  const Stars(this.value, {super.key, this.size = 16});
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        for (var i = 1; i <= 5; i++)
+          Icon(value >= i ? Icons.star_rounded : (value >= i - 0.5 ? Icons.star_half_rounded : Icons.star_outline_rounded), size: size, color: brandYellow),
+      ]);
+}
+
+/// Opens a short video (or any link) in the phone's player / browser.
+Future<void> openFile(BuildContext c, String id) => openUri(c, Api.fileUri(id));

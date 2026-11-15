@@ -20,8 +20,11 @@ class Api {
 
   static Map<String, String> get authHeaders => {if (token != null) 'Authorization': 'Bearer $token'};
   static Map<String, String> get _json => {'Content-Type': 'application/json', ...authHeaders};
-  static String fileUrl(String id) => '$apiBase/files/$id';
+  /// [w] asks the server for a small version of a picture (faster lists).
+  static String fileUrl(String id, {int? w}) => '$apiBase/files/$id${w != null ? '?w=$w' : ''}';
   static Uri fileUri(String id) => Uri.parse('${fileUrl(id)}?token=${token ?? ''}');
+  /// Download link of a BOQ as 'pdf' or 'xlsx' (opened in the browser / downloads app).
+  static Uri boqExportUri(String id, String format) => Uri.parse('$apiBase/boq/$id/export?format=$format&token=${token ?? ''}');
 
   static Future<dynamic> _send(Future<http.Response> Function() f) async {
     http.Response r;
@@ -46,6 +49,18 @@ class Api {
   static Future<dynamic> put(String p, [Object? b]) =>
       _send(() => http.put(Uri.parse('$apiBase$p'), headers: _json, body: jsonEncode(b ?? {})));
   static Future<dynamic> delete(String p) => _send(() => http.delete(Uri.parse('$apiBase$p'), headers: authHeaders));
+
+  /// Admin: picture or short video for the Home page / Help pages.
+  static Future<Map<String, dynamic>> uploadMedia(String path, String placement, String title) async {
+    return await _send(() async {
+      final req = http.MultipartRequest('POST', Uri.parse('$apiBase/admin/media'));
+      req.headers.addAll(authHeaders);
+      req.fields['placement'] = placement;
+      if (title.isNotEmpty) req.fields['title'] = title;
+      req.files.add(await http.MultipartFile.fromPath('file', path));
+      return http.Response.fromStream(await req.send());
+    }) as Map<String, dynamic>;
+  }
 
   static Future<Map<String, dynamic>> upload(String path) async {
     return await _send(() async {

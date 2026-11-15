@@ -11,11 +11,11 @@ async function call(method, path, body, token, form) {
   let j = null; try { j = await r.json(); } catch (e) {}
   return { s: r.status, j };
 }
-// Client: name + phone, no code. Fundi: register with username/password. Admin: username/password.
+// Client: name + phone, no code. Fundi: register with phone number + password. Admin: username/password.
 async function login(identifier, extra = {}) {
   let r;
   if (extra.app === 'admin') r = await call('POST', '/auth/login', { username: identifier, password: extra.password, app: 'admin' });
-  else if (extra.intent === 'fundi') r = await call('POST', '/auth/register', { username: 'fundi' + identifier, password: 'secret123', phone: '07' + identifier, language: 'sw' });
+  else if (extra.intent === 'fundi') r = await call('POST', '/auth/register', { password: 'secret123', phone: '07' + identifier, language: 'sw' });
   else r = await call('POST', '/auth/client-start', { phone: identifier, name: extra.name || 'Test Client', language: 'sw' });
   return { token: r.j.token, user: r.j.user };
 }
@@ -37,36 +37,38 @@ async function upload(token, name, buf, type) {
   const strangerInAdmin = await call('POST', '/auth/login', { username: 'nobody' + sfx, password: 'secret123', app: 'admin' });
   ok(strangerInAdmin.s === 401, 'unknown username is refused in the Admin app');
   const clientAgain = await call('POST', '/auth/client-start', { phone: '07' + sfx + '11', name: 'Asha Mteja', language: 'sw' });
-  ok(clientAgain.s === 200 && clientAgain.j.user.id === client.user.id && !clientAgain.j.is_new, 'same phone number opens the same client account');
+  ok(clientAgain.s === 200 && clientAgain.j.user.id === client.user.id && !clientAgain.j.is_new, 'same phone number and name open the same client account');
+  const clientOther = await call('POST', '/auth/client-start', { phone: '07' + sfx + '11', name: 'Mtu Mwingine', language: 'sw' });
+  ok(clientOther.s === 200 && clientOther.j.is_new && clientOther.j.user.id !== client.user.id, 'the same phone number can be used by another client (different name)');
   const noPhone = await call('POST', '/auth/client-start', { name: 'X' });
   ok(noPhone.s === 400, 'client needs a valid phone number');
   const adminAsClient = await call('POST', '/auth/client-start', { phone: '0613936160', name: 'X' });
   ok(adminAsClient.s === 403, 'admin phone cannot be used as a client');
-  const f1 = await call('POST', '/auth/register', { username: 'Juma' + sfx, password: 'secret123', phone: '0788' + sfx });
-  ok(f1.s === 200 && f1.j.user.role === 'fundi' && f1.j.user.fundi_status === 'incomplete', 'fundi sets username and password the first time');
-  const f2 = await call('POST', '/auth/register', { username: 'juma' + sfx, password: 'other123', phone: '0789' + sfx });
-  ok(f2.s === 409 && f2.j.error === 'username_taken', 'username is unique (case-insensitive)');
-  const f3 = await call('POST', '/auth/register', { username: 'abc' + sfx, password: '123', phone: '0787' + sfx });
-  ok(f3.s === 400 && f3.j.error === 'weak_password', 'short password rejected');
-  const f4 = await call('POST', '/auth/login', { username: 'JUMA' + sfx, password: 'secret123' });
-  ok(f4.s === 200 && f4.j.user.id === f1.j.user.id, 'fundi signs in again with the saved username and password (another phone)');
-  const f5 = await call('POST', '/auth/login', { username: 'juma' + sfx, password: 'nope1234' });
-  ok(f5.s === 401, 'fundi wrong password rejected');
-  const noPh = await call('POST', '/auth/register', { username: 'nophone' + sfx, password: 'secret123' });
+  const f1 = await call('POST', '/auth/register', { password: 'secret123', phone: '0788' + sfx });
+  ok(f1.s === 200 && f1.j.user.role === 'fundi' && f1.j.user.fundi_status === 'incomplete', 'fundi registers with phone number and password');
+  const f3 = await call('POST', '/auth/register', { password: '123', phone: '0787' + sfx });
+  ok(f3.s === 400 && f3.j.error === 'weak_password', 'weak password refused');
+  const f4 = await call('POST', '/auth/login', { username: '0788' + sfx, password: 'secret123' });
+  ok(f4.s === 200 && f4.j.user.id === f1.j.user.id, 'fundi signs in with the phone number and password');
+  const f4b = await call('POST', '/auth/login', { username: '+255788' + sfx, password: 'secret123' });
+  ok(f4b.s === 200 && f4b.j.user.id === f1.j.user.id, 'phone number works in any format');
+  const f5 = await call('POST', '/auth/login', { username: '0788' + sfx, password: 'nope1234' });
+  ok(f5.s === 401, 'wrong password refused');
+  const noPh = await call('POST', '/auth/register', { password: 'secret123' });
   ok(noPh.s === 400 && noPh.j.error === 'invalid_phone', 'fundi must give a phone number');
-  const dupPh = await call('POST', '/auth/register', { username: 'dup' + sfx, password: 'secret123', phone: '0788' + sfx });
-  ok(dupPh.s === 409 && dupPh.j.error === 'phone_in_use', 'phone number cannot be reused');
+  const dupPh = await call('POST', '/auth/register', { password: 'secret123', phone: '0788' + sfx });
+  ok(dupPh.s === 409 && dupPh.j.error === 'phone_in_use', 'fundi phone number cannot be reused');
   // forgot password: request by registered phone, Admin sets a temporary one, Fundi must replace it
   ok((await call('POST', '/auth/forgot', { phone: '0788' + sfx })).s === 200 && (await call('POST', '/auth/forgot', { phone: '0700000000' })).s === 200, 'forgot request always answers ok');
   const fl = (await call('GET', '/admin/fundis', null, admin.token)).j.find((x) => x.id === f1.j.user.id);
   ok(fl && fl.reset_requested_at, 'Admin sees the reset request');
   const rp = await call('POST', `/admin/fundis/${f1.j.user.id}/reset-password`, {}, admin.token);
   ok(rp.s === 200 && rp.j.temp_password.length === 8, 'Admin sets a temporary password');
-  const tl = await call('POST', '/auth/login', { username: 'juma' + sfx, password: rp.j.temp_password });
+  const tl = await call('POST', '/auth/login', { username: '0788' + sfx, password: rp.j.temp_password });
   ok(tl.s === 200 && tl.j.user.must_change_password === true, 'Fundi signs in with it and must change it');
   const sp = await call('POST', '/auth/set-password', { password: 'brandnew1' }, tl.j.token);
   ok(sp.s === 200 && sp.j.user.must_change_password === false, 'Fundi sets own password');
-  ok((await call('POST', '/auth/login', { username: 'juma' + sfx, password: rp.j.temp_password })).s === 401 && (await call('POST', '/auth/login', { username: 'juma' + sfx, password: 'brandnew1' })).s === 200, 'temporary password stops working');
+  ok((await call('POST', '/auth/login', { username: '0788' + sfx, password: rp.j.temp_password })).s === 401 && (await call('POST', '/auth/login', { username: '0788' + sfx, password: 'brandnew1' })).s === 200, 'temporary password stops working');
   const ch = await call('PUT', '/auth/credentials', { current_password: 'wrong', password: 'newpass123' }, f1.j.token);
   ok(ch.s === 403 && ch.j.error === 'wrong_password', 'changing credentials needs the current password');
 
@@ -259,6 +261,46 @@ async function upload(token, name, buf, type) {
   const upd = await call('POST', '/admin/admins', { identifier: '07' + sfx + '77', name: 'Msaidizi Mwanza', region_ids: [mwanza.id, mbeya.id] }, admin.token);
   const mw2 = (await call('GET', '/admin/payments', null, mw.token)).j;
   ok(upd.s === 200 && Number(mw2.totals.total) === 100000, 'changing the regions of an admin takes effect');
+
+  console.log('v2: categories, multi-service, directory, cancel, BOQ');
+  const cats = (await call('GET', '/categories')).j;
+  ok(cats.length >= 3 && cats.some((c) => c.key === 'plumbing'), 'categories listed (electrical, mechanics, plumbing)');
+  const svcAll = (await call('GET', '/services')).j;
+  const elecCat = cats.find((c) => c.key === 'electrical');
+  const elecSvcs = svcAll.filter((x) => x.category_id === elecCat.id).slice(0, 2);
+  const dir = await call('GET', `/directory/fundis?district_id=${dist.id}&category_id=${elecCat.id}`, null, client.token);
+  ok(dir.s === 200 && dir.j.some((f) => f.id === fundi.user.id) && !dir.j[0].phone, 'client browses Fundis by area and category, without phone numbers');
+  const multi = await call('POST', '/jobs', { category_id: elecCat.id, service_ids: elecSvcs.map((x) => x.id), other_service: 'Kufunga kengele', lat: LAT, lng: LNG,
+    region_id: mbeya.id, district_id: dist.id, ward_text: 'Kitongoji kipya', fundi_id: fundi.user.id }, client.token);
+  ok(multi.s === 200 && multi.j.services.length === 2 && multi.j.other_service && multi.j.target_fundi && multi.j.target_fundi.phone, 'job with several services, optional description, chosen Fundi (full details visible)');
+  const admN = (await call('GET', '/notifications', null, admin.token)).j;
+  ok(admN.items.some((n) => n.job_id === multi.j.id), 'admin is notified of the new request');
+  const rs = await call('POST', `/jobs/${multi.j.id}/resend`, {}, client.token);
+  ok(rs.s === 200, 'client resends a pending request');
+  const rs2 = await call('POST', `/jobs/${multi.j.id}/resend`, {}, client.token);
+  ok(rs2.s === 429, 'resend is rate limited');
+  const cnl = await call("POST", `/jobs/${multi.j.id}/cancel`, {}, client.token);
+  ok(cnl.s === 200 && !(await call('GET', '/jobs', null, client.token)).j.some((x) => x.id === multi.j.id), 'cancelled request disappears from the client list');
+  ok((await call('GET', `/admin/jobs/${multi.j.id}`, null, admin.token)).j.status === 'cancelled', 'admin still sees the cancelled request');
+  ok((await call('DELETE', `/admin/jobs/${multi.j.id}`, null, admin.token)).s === 200, 'admin can delete a cancelled request');
+  const boqM = (await call('GET', '/boq/master', null, fundi.token)).j;
+  ok(boqM.items.length > 40 && boqM.items[0].kind === 'section' && boqM.items[1].no === '1.1', 'BOQ master list loaded and numbered');
+  const bq = (await call('POST', '/boq', { job_id: job.id }, fundi.token)).j;
+  ok(bq.id && bq.client_name === 'Asha Mteja' && bq.lines.every((l) => !l.qty), 'new BOQ starts with quantity 0 and client details');
+  const firstItem = bq.lines.find((l) => l.kind === 'item');
+  firstItem.qty = 2; firstItem.rate = 1000;
+  bq.lines.push({ kind: 'item', desc: 'Custom item', unit: 'pcs', qty: 3, rate: 500 });
+  const sv = (await call('PUT', `/boq/${bq.id}`, { ...bq }, fundi.token)).j;
+  ok(sv.total === 3500, 'BOQ total is quantity x rate');
+  ok((await call('GET', '/boq/master', null, fundi.token)).j.items.find((i) => i.id === firstItem.item_id).rate === 1000, 'own price stays with the Fundi');
+  ok((await call('GET', '/boq/master', null, admin.token)).j.items.find((i) => i.id === firstItem.item_id).rate !== 1000, 'master price unchanged');
+  ok((await call('GET', `/boq/${bq.id}`, null, client.token)).s === 200, 'client of the job can view the BOQ');
+  const pdfR = await fetch(B + `/boq/${bq.id}/export?format=pdf`, { headers: { Authorization: 'Bearer ' + fundi.token } });
+  ok(pdfR.status === 200 && (await pdfR.arrayBuffer()).byteLength > 1000, 'BOQ exports as PDF');
+  const xlR = await fetch(B + `/boq/${bq.id}/export?format=xlsx`, { headers: { Authorization: 'Bearer ' + fundi.token } });
+  ok(xlR.status === 200 && (await xlR.arrayBuffer()).byteLength > 1000, 'BOQ exports as Excel');
+  const noext = await upload(client.token, 'IMG_0001', png, 'application/octet-stream');
+  ok(noext && noext.id && noext.mime === 'image/webp', 'a picture without extension or type is accepted');
 
   console.log(`\n${pass} passed, ${failN} failed`);
   process.exit(failN ? 1 : 0);

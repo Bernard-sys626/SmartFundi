@@ -18,6 +18,17 @@ function checkPassword(pw, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Sign in with the phone number (Fundi/Company) or a username (Admin and older accounts).
+async function findLoginUser(raw) {
+  const uname = normUsername(raw);
+  let u = uname ? await q1('select * from users where lower(username)=$1', [uname]) : null;
+  if (!u) {
+    const ph = normId(raw);
+    if (ph && ph.type === 'phone') u = await q1(`select * from users where phone=$1 and role <> 'client' and password_hash is not null`, [ph.value]);
+  }
+  return u;
+}
+
 const asyncH = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch((e) => {
     console.error(e);
@@ -90,6 +101,10 @@ const TXT = {
     approved: ['Usajili umekubaliwa', 'Akaunti yako imeidhinishwa. Sasa unaweza kupokea kazi.'],
     rejected: ['Usajili umekataliwa', 'Maombi yako hayakukubaliwa. {reason}'],
     reset_request: ['Ombi la kubadilisha password', '{name} ({phone}) amesahau password na anaomba kuwekewa mpya.'],
+    new_job_admin: ['Ombi jipya la mteja', '{client} ameomba huduma ya {service}, eneo: {area}. Kazi {code}.'],
+    job_for_you: ['Umechaguliwa na mteja', '{client} amekuchagua kwa kazi {code} ({service}). Tafadhali ikubali.'],
+    job_resent: ['Ombi limetumwa tena', 'Mteja ametuma tena ombi {code} la huduma ya {service}.'],
+    job_taken: ['Kazi imechukuliwa', 'Kazi {code} imeshachukuliwa na fundi mwingine.'],
   },
   en: {
     job_accepted: ['Job accepted', '{name} accepted your job {code}.'],
@@ -106,6 +121,10 @@ const TXT = {
     approved: ['Registration approved', 'Your account is approved. You can now receive jobs.'],
     rejected: ['Registration rejected', 'Your application was not approved. {reason}'],
     reset_request: ['Password reset request', '{name} ({phone}) forgot their password and asks for a new one.'],
+    new_job_admin: ['New client request', '{client} requested {service}, area: {area}. Job {code}.'],
+    job_for_you: ['You were chosen by a client', '{client} chose you for job {code} ({service}). Please accept it.'],
+    job_resent: ['Request sent again', 'The client sent request {code} for {service} again.'],
+    job_taken: ['Job taken', 'Job {code} has already been taken by another Fundi.'],
   },
   fr: {
     job_accepted: ['Travail accepté', '{name} a accepté votre demande {code}.'],
@@ -122,6 +141,10 @@ const TXT = {
     approved: ['Inscription approuvée', 'Votre compte est approuvé. Vous pouvez recevoir des travaux.'],
     rejected: ['Inscription refusée', 'Votre demande n\'a pas été acceptée. {reason}'],
     reset_request: ['Demande de nouveau mot de passe', '{name} ({phone}) a oublié son mot de passe et en demande un nouveau.'],
+    new_job_admin: ['Nouvelle demande client', '{client} a demandé {service}, zone : {area}. Travail {code}.'],
+    job_for_you: ['Vous avez été choisi par un client', '{client} vous a choisi pour le travail {code} ({service}). Veuillez l\'accepter.'],
+    job_resent: ['Demande renvoyée', 'Le client a renvoyé la demande {code} pour {service}.'],
+    job_taken: ['Travail pris', 'Le travail {code} a déjà été pris par un autre Fundi.'],
   },
 };
 function render(lang, key, vars) {
@@ -154,4 +177,4 @@ async function notify(userId, key, vars = {}, jobId = null) {
 }
 const money = (n) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
-module.exports = { normUsername, validUsername, validPassword, hashPassword, checkPassword, asyncH, fail, sign, auth, role, mainAdmin, normId, haversine, getSetting, setSetting, notify, initFcm, money };
+module.exports = { normUsername, validUsername, validPassword, hashPassword, checkPassword, asyncH, fail, sign, auth, role, mainAdmin, normId, haversine, getSetting, setSetting, notify, initFcm, money, findLoginUser };
