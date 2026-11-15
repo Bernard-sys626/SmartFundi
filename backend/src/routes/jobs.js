@@ -274,7 +274,7 @@ router.post('/:id/cancel', auth, role('client'), asyncH(async (req, res) => {
   if (j.fundi_id) await notify(j.fundi_id, nauli ? 'cancelled_nauli' : 'cancelled', { code: j.code }, j.id);
   if (nauli) await notify(j.client_id, 'cancelled_nauli', { code: j.code }, j.id);
   for (const id of await adminIdsFor(j.region_id)) await notify(id, 'cancelled', { code: j.code }, j.id).catch(() => {});
-  res.json({ ok: true, id: j.id, hidden: !nauli });
+  res.json({ ...(await jobView(j.id, req.user)), ok: true, hidden: !nauli });
 }));
 
 // Send the request again (nobody accepted yet). With open_to_all the request is opened to every matching Fundi.

@@ -634,8 +634,9 @@ Future<Map<String, dynamic>?> pickLocation(BuildContext c, {bool wholeDistrict =
   while (true) {
     final rid = await pickSheet<int>(c, tr('region'), [for (final r in regions) (r['id'] as int, r['name'] as String)], search: true);
     if (rid == null || !c.mounted) return null;
-    region = regions.firstWhere((r) => r['id'] == rid);
-    if (requireActive && region['active'] != true) {
+    final rg = Map<dynamic, dynamic>.from(regions.firstWhere((r) => r['id'] == rid) as Map);
+    region = rg;
+    if (requireActive && rg['active'] != true) {
       await notReached(c);
       if (!c.mounted) return null;
       continue;
@@ -649,15 +650,17 @@ Future<Map<String, dynamic>?> pickLocation(BuildContext c, {bool wholeDistrict =
     }
     final did = await pickSheet<int>(c, tr('district'), [for (final d in ds) (d['id'] as int, d['name'] as String)], search: true);
     if (did == null || !c.mounted) return null;
-    district = ds.firstWhere((d) => d['id'] == did);
-    if (requireActive && district!['active'] != true) {
+    final dt = Map<dynamic, dynamic>.from(ds.firstWhere((d) => d['id'] == did) as Map);
+    district = dt;
+    if (requireActive && dt['active'] != true) {
       await notReached(c);
       if (!c.mounted) return null;
       continue;
     }
     break;
   }
-  final did = district!['id'] as int;
+  final reg = region!, dist = district!;
+  final did = dist['id'] as int;
   final ws = await busyVal<List>(c, () async => await Api.get('/locations/wards?district_id=$did') as List);
   if (ws == null || !c.mounted) return null;
   int? wid;
@@ -684,10 +687,10 @@ Future<Map<String, dynamic>?> pickLocation(BuildContext c, {bool wholeDistrict =
     if (t != null && t.isNotEmpty) wtext = t;
   }
   return {
-    'region_id': region['id'], 'district_id': did, 'ward_id': wid, 'ward_text': wtext,
-    'region_name': region['name'], 'district_name': district['name'], 'ward_name': wname ?? wtext,
-    'active': region['active'] == true && district['active'] == true,
-    'label': [wname ?? wtext, district['name'], region['name']].whereType<String>().join(', '),
+    'region_id': reg['id'], 'district_id': did, 'ward_id': wid, 'ward_text': wtext,
+    'region_name': reg['name'], 'district_name': dist['name'], 'ward_name': wname ?? wtext,
+    'active': reg['active'] == true && dist['active'] == true,
+    'label': [wname ?? wtext, dist['name'], reg['name']].whereType<String>().join(', '),
   };
 }
 

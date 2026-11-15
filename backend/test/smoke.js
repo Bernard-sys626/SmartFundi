@@ -138,7 +138,7 @@ async function upload(token, name, buf, type) {
   console.log('Fundi works the job');
   const acc = await call('POST', `/fundi/jobs/${job.id}/accept`, null, fundi.token);
   ok(acc.j.status === 'accepted' && acc.j.client.phone, 'fundi accepted, client contact unlocked');
-  const mf = await login('07' + sfx + '33');
+  const mf = await login(sfx + '33', { intent: 'fundi' });
   const acc2 = await call('POST', `/fundi/jobs/${job.id}/accept`, null, mf.token);
   ok(acc2.s === 409 || acc2.s === 403, 'other fundis cannot take an accepted job');
   const cn = (await call('GET', '/notifications', null, client.token)).j;
@@ -199,7 +199,7 @@ async function upload(token, name, buf, type) {
   ok(dash.payments.platform > 0 && dash.clients >= 1, 'admin dashboard has totals');
   const cov = (await call('GET', '/admin/coverage', null, admin.token)).j;
   ok(cov.find((r) => r.name === 'Mbeya').fundis >= 1, 'coverage shows fundis per region');
-  const svc = await call('POST', '/admin/services', { name_sw: 'Mabomba', name_en: 'Plumbing', trade: 'plumbing' }, admin.token);
+  const svc = await call('POST', '/admin/services', { name_sw: 'Mabomba', name_en: 'Plumbing', trade: 'plumbing', category_id: ((await call('GET', '/categories', null, admin.token)).j.find((x) => x.key === 'plumbing') || {}).id }, admin.token);
   ok(svc.j.trade === 'plumbing', 'admin can add a new service (future trades)');
   const reg = await call('POST', '/admin/admins', { identifier: '07' + sfx + '44', name: 'Msaidizi Mbeya', username: 'sub' + sfx, password: 'subpass123', region_ids: [mbeya.id] }, admin.token);
   const sub1 = await login('sub' + sfx, { app: 'admin', password: 'subpass123' });

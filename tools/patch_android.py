@@ -45,6 +45,9 @@ for name in ("app/build.gradle", "app/build.gradle.kts"):
         g = f.read_text()
         g = re.sub(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 23", g)
         g = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 23", g)
+        # plugins (file_picker, firebase, geolocator...) need NDK 27
+        g = re.sub(r"ndkVersion\s*=\s*flutter\.ndkVersion", 'ndkVersion = "27.0.12077973"', g)
+        g = re.sub(r"ndkVersion\s+flutter\.ndkVersion", 'ndkVersion "27.0.12077973"', g)
         if args.app_id:
             g = re.sub(r'applicationId\s*=\s*"[^"]+"', f'applicationId = "{args.app_id}"', g)
             g = re.sub(r'applicationId\s+"[^"]+"', f'applicationId "{args.app_id}"', g)

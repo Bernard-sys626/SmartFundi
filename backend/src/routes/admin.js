@@ -419,7 +419,7 @@ router.post('/admins', mainAdmin, asyncH(async (req, res) => {
   let u;
   try {
     u = await q1(`insert into users(role,${col},name,username,password_hash) values('admin',$1,$2,$3,$4)
-                  on conflict(${col}) do update set role='admin', name=coalesce($2,users.name),
+                  on conflict(${col})${col === 'phone' ? " where role <> 'client'" : ''} do update set role='admin', name=coalesce($2,users.name),
                   username=coalesce($3,users.username), password_hash=coalesce($4,users.password_hash) returning id`,
       [id.value, req.body.name || null, username, username ? hashPassword(req.body.password) : null]);
   } catch (e) {
