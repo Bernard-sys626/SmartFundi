@@ -138,9 +138,12 @@ async function upload(token, name, buf, type) {
   console.log('Fundi works the job');
   const acc = await call('POST', `/fundi/jobs/${job.id}/accept`, null, fundi.token);
   ok(acc.j.status === 'accepted' && acc.j.client.phone, 'fundi accepted, client contact unlocked');
-  const mf = await login(sfx + '33', { intent: 'fundi' });
+  // The second Fundi was registered by the Admin: sign in with the temporary password the Admin generates.
+  const mfReset = await call('POST', `/admin/fundis/${manual.j.user.id}/reset-password`, {}, admin.token);
+  const mfLogin = await call('POST', '/auth/login', { username: '07' + sfx + '33', password: mfReset.j.temp_password });
+  const mf = { token: mfLogin.j && mfLogin.j.token };
   const acc2 = await call('POST', `/fundi/jobs/${job.id}/accept`, null, mf.token);
-  ok(acc2.s === 409 || acc2.s === 403, 'other fundis cannot take an accepted job');
+  ok(acc2.s === 409 && acc2.j.error === 'already_taken', 'other fundis cannot take an accepted job');
   const cn = (await call('GET', '/notifications', null, client.token)).j;
   ok(cn.items.some((n) => n.title.includes('Kazi imekubaliwa')), 'client notified: job accepted');
   await call('POST', `/jobs/${job.id}/messages`, { body: 'Habari, ninakuja' }, fundi.token);
